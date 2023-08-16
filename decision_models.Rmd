@@ -20,19 +20,151 @@ registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
 # Simple Markov Model: hesim vignette
 
--   Death not included as a state.
+-   Death not included as a state, but it is included in the transition count matrix.
+
+-   Params is a very broad list.
+
+-   Why are parameters include in the PSA if they aren't variable?
+
+-   Not sure I understand the transformed parameters concept...
 
 ```{r}
 strategies <- data.table(strategy_id = 1:2,
                          strategy_name = c("Monotherapy", "Combination Therapy"))
 patients <- data.table(patient_id = 1)
 states <- data.table(state_id = 1:3,
-                     state_name = letters[1:3]) 
+                     state_name = str_to_upper(letters[1:3]))
 hesim_data <- hesim_data(strategies, patients, states)
 labels <- get_labels(hesim_data)
 ```
 
 ```{r}
+trans_monotherapy <- matrix(c(1251, 350, 116, 17,
+                         0, 731, 512, 15,
+                         0, 0, 1312, 437,
+                         0, 0, 0, 469),
+                       ncol = 4, nrow = 4, byrow = TRUE)
+colnames(trans_monotherapy) <- rownames(trans_monotherapy) <- str_to_upper(letters[1:4])
+trans_monotherapy
+```
 
+The transition probabilities from state r to each of the 4 states (State A, State B, State C, and State D) can be modelled using Dirichlet distributions, which are parameterised by a vector of concentration parameters α=(αr1,αr2,αr3,αr4). The Dirichlet distribution is particularly useful for modelling uncertainty in the transition probabilities because it is a conjugate prior for the multinomial distribution. The posterior distribution of α consequently follows a Dirichlet distribution which can be thought of as the “effective sample size” for each transition (see Appendix).
+
+Treatment effects are defined in terms of the relative risk, which is assumed to reduce the probability of all transitions to a more severe health state by an equal amount. We work with the log relative risk since it is approximately normally distributed. The estimated relative risk of disease progression is 0.509 (95% CI 0.365 to 0.710). We can then calculate the mean and standard error on the log scale.
+
+Analysis is only on LYs, not QALYs.
+
+```{r}
+params <- list(
+  alpha_mono = trans_monotherapy,
+  lrr_mean = log(.509),
+  lrr_lower = log(.365),
+  lrr_upper = log(.710),
+  c_dmed_mean = c(A = 1701, B = 1774, C = 6948),
+  c_cmed_mean = c(A = 1055, B = 1278, C = 2059),
+  c_zido = 2278,
+  c_lam = 2086.50,
+  u = 1
+)
+```
+
+## PSA
+
+As noted above, we draw the transition probabilities with monotherapy from a Dirichlet distribution and the relative risk (of a transition to a worse state with combination therapy relative to monotherapy) from a lognormal distribution. Drug costs and utility are assumed to be fixed while medical costs are drawn from gamma distributions.
+
+```{r}
+rng_def <- define_rng({
+  lrr_se <- (lrr_upper - lrr_lower)/(2 * qnorm(.975)) 
+  
+  list(
+    p_mono = dirichlet_rng(alpha_mono),
+    rr_comb = lognormal_rng(lrr_mean, lrr_se),
+    c_zido = c_zido,
+    c_lam = c_lam,
+    c_dmed = gamma_rng(mean = c_dmed_mean, sd = c_dmed_mean),
+    c_cmed = gamma_rng(mean = c_cmed_mean, sd = c_cmed_mean),
+    u = u
+  )
+}, n = 1000)
+```
+
+## Tranformed Parameters
+
+```{r}
+input_data <- expand(hesim_data, by = c("strategies", "patients"))
+input_data
+```
+
+-   What is C?
+
+```{r}
+tparams_def <- define_tparams({
+  ## The treatment effect (relative risk) is transformed so that it varies by 
+  ## strategies and only applies for the first 2 years (Monotherapy is 
+  ## the reference strategy). 
+  rr <- ifelse(strategy_name == "Monotherapy" | time > 2, 1, rr_comb)
+  
+  list(
+    tpmatrix = tpmatrix(
+      C, p_mono$A_B * rr, p_mono$A_C * rr, p_mono$A_D * rr,
+      0, C,               p_mono$B_C * rr, p_mono$B_D * rr,
+      0, 0,               C,               p_mono$C_D * rr,
+      0, 0,               0,               1
+    ),
+    
+    utility = u,
+    
+    costs = list(
+        drug = ifelse(strategy_name == "Monotherapy" | time > 2,
+                      c_zido, c_zido + c_lam),
+        community_medical = c_cmed,
+        direct_medical = c_dmed
+    )
+  )
+}, times = c(2, Inf))
+```
+
+Neither worth printing:
+
+```{r}
+mod_def <- define_model(tparams_def, rng_def, params)
+
+econmod <- create_CohortDtstm(mod_def, input_data)
+```
+
+```{r}
+econmod$sim_stateprobs(n_cycles = 20)
+econmod$stateprobs_
+```
+
+```{r}
+autoplot(econmod$stateprobs_, labels, ci = TRUE, ci_style = "ribbon")
+```
+
+```{r}
+econmod$sim_qalys(dr = 0, integrate_method = "riemann_right")
+head(econmod$qalys_)
+```
+
+```{r}
+econmod$sim_costs(dr = 0.06, integrate_method = "riemann_right")
+head(econmod$costs_)
+```
+
+```{r}
+ce_sim <- econmod$summarize()
+ce_sim
+wtp <- seq(0, 25000, 500)
+cea_pw_out <- cea_pw(ce_sim, comparator = 1, dr_qalys = 0, dr_costs = .06,
+                     k = wtp)
+cea_pw_out
+```
+
+```{r}
+format(icer(cea_pw_out))
+```
+
+```{r}
+plot_ceac(cea_pw_out, labels = labels)
 ```
 
