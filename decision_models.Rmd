@@ -1,0 +1,38 @@
+---
+title: "Decision Models"
+date: "`r conr::format_date()`"
+author: "Connor Ballinger"
+knit: conr::write_and_date
+output: conr::format_html
+---
+
+```{r}
+knitr::opts_chunk$set()
+
+library(here)
+library(tidyverse)
+library(knitr)
+library(hesim)
+library(data.table)
+
+registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
+```
+
+# Simple Markov Model: hesim vignette
+
+-   Death not included as a state.
+
+```{r}
+strategies <- data.table(strategy_id = 1:2,
+                         strategy_name = c("Monotherapy", "Combination Therapy"))
+patients <- data.table(patient_id = 1)
+states <- data.table(state_id = 1:3,
+                     state_name = letters[1:3]) 
+hesim_data <- hesim_data(strategies, patients, states)
+labels <- get_labels(hesim_data)
+```
+
+```{r}
+
+```
+
