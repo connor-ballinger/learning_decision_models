@@ -193,6 +193,8 @@ rng_def <- define_rng({
 
 -   The sampled parameter values are “transformed” as a function of input data, which consists of all treatment strategy and patient combinations.
 
+-   
+
 ```{r}
 input_data <- expand(hesim_data, by = c("strategies", "patients"))
 input_data
@@ -200,12 +202,89 @@ input_data
 
 -   Separate transformation functions are used for the transition model and the cost/utility models. This is done for computational efficiency since only the transition model depends on cycle time. In the transition model, the revision rate (rr) depends on the scale and the shape parameters, which, in turn, depend on the sampled values of the parameters from the Weibull model. Mortality rate depends on sex and patient's age each cycle.
 
+-   Not sure about mortality rate here...
+
+-   Is this the first time a transition matrix is used? Surprising there isn't more emphasis. Maybe pull it out of define_tparams and print it earlier.
+
 ```{r}
 transitions_def <- define_tparams({
   
   # Regression for revision risk
   
-  scale <- exp(rr_coef$cons)
+  male <- ifelse(sex == "Female", 0, 1)
+  np1 <- ifelse(strategy_name == "Standard prosthesis", 0, 1)
+  
+  scale <- exp(rr_coef$cons + rr_coef$age * age + rr_coef$male * male + # age or age_calc?
+                 rr_coef$np1 * np1)
+  shape <- exp(rr_coef$lngamma)
+  
+  rr <- 1 - exp(scale * ((time - 1)^shape - time^shape)) # where does time come from?
+  
+  # Mortality
+  
+  age_new <- age + time
+  
+  mr <- mr_female[["35"]] * (sex == "Female" & age_new >= 35 & age_new < 45) +
+        mr_female[["45"]] * (sex == "Female" & age_new >= 45 & age_new < 55) +
+        mr_female[["55"]] * (sex == "Female" & age_new >= 55 & age_new < 65) +
+        mr_female[["65"]] * (sex == "Female" & age_new >= 65 & age_new < 75) +
+        mr_female[["75"]] * (sex == "Female" & age_new >= 75 & age_new < 85) +
+        mr_female[["85"]] * (sex == "Female" & age_new >= 85) +
+        
+        mr_male[["35"]] * (sex == "Male" & age_new >= 35 & age_new < 45) +
+        mr_male[["45"]] * (sex == "Male" & age_new >= 45 & age_new < 55) +
+        mr_male[["55"]] * (sex == "Male" & age_new >= 55 & age_new < 65) +
+        mr_male[["65"]] * (sex == "Male" & age_new >= 65 & age_new < 75) +
+        mr_male[["75"]] * (sex == "Male" & age_new >= 75 & age_new < 85) +
+        mr_male[["85"]] * (sex == "Male" & age_new >= 85)
+  
+  list(
+    tpmatrix <- tpmatrix(
+      0,   C,   0,  0,   omrPTHR,
+      0,   C,  rr,  0,   mr,
+      0,   0,   0,  C,   omrRTHR + mr,
+      0,   0, rrr,  C,   mr,
+      0,   0,   0,  0,   1)      
+    )
+}, times = 1:60) # model 60 years/cycles
+
+```
+
+```{r}
+statevals_def <- define_tparams({
+  
+  c_prosthesis <- ifelse(strategy_name == "Standard prosthesis", 
+                         c_Standard,
+                         c_NP1)
+  
+  list(
+    utility = u,
+    costs = list(
+      prosthesis = c_prosthesis,
+      medical = c_medical
+    )
+  )
 })
+```
+
+## Collate Model
+
+-   Not sure about cost_args methods - wlos? See StateVals docs: 
+
+    -   If wlos, then costs and QALYs are simulated by weighting state values by the length of stay in a health state. If starting, then state values represent a one-time value that occurs when a patient enters a health state.
+
+```{r}
+mod_def <- define_model(tparams_def = list(transitions_def, statevals_def),
+                        rng_def = rng_def,
+                        params = params)
+```
+
+```{r}
+cost_args <- list(
+  prosthesis = list(method = "starting"), # one-off cost each THR
+  medical = list(method = "wlos")
+)
+
+econmod <- create_CohortDtstm(mod_def, input_data = input_data, cost_args = cost_args)
 ```
 
