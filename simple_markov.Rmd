@@ -28,6 +28,8 @@ registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
 -   Not sure I understand the transformed parameters concept...
 
+-   What is C in tpmatrix? See tparams documentation: C refers to the row-wise complement of the other probabilities i.e. it exists for convenience. Would it be safer to avoid using, and then receive errors if probabilities are incorrect?
+
 ```{r}
 strategies <- data.table(strategy_id = 1:2,
                          strategy_name = c("Monotherapy", "Combination Therapy"))
@@ -94,8 +96,6 @@ rng_def <- define_rng({
 input_data <- expand(hesim_data, by = c("strategies", "patients"))
 input_data
 ```
-
--   What is C?
 
 ```{r}
 tparams_def <- define_tparams({

@@ -1,0 +1,211 @@
+---
+title: "Title"
+date: "`r conr::format_date()`"
+author: "Connor Ballinger"
+knit: conr::write_and_date
+output: conr::format_html
+---
+
+```{r}
+knitr::opts_chunk$set()
+
+library(here)
+library(tidyverse)
+library(knitr)
+library(hesim)
+library(data.table)
+
+registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
+
+```
+
+# Time inhomogeneous Markov cohort models: hesim vignette
+
+The model is time-inhomogeneous because (i) the prosthesis survival time is modelled using a Weibull survival model so that the probability of failure is time-varying and (ii) background mortality rates increase as patients age.
+
+```{r}
+strategies <- data.table(strategy_id = 1:2,
+                         strategy_name = c("Strat1", "Strat2"))
+
+states <- data.table(state_id = 1:4,
+                     state_name = c("Primary THR", "Successful Primary",
+                                    "Revision THR", "Successful Revision"))
+```
+
+# Patient Characteristics
+
+```{r}
+ages <- seq(55, 75, 5)
+age_weights <- c(.05, .1, .4, .25, .20)
+sex_weights <- c(.65, .35)
+weights <- rep(age_weights, times = 2) * rep(sex_weights, each = length(ages))
+
+patients <- data.table(patient_id = 1:10, 
+                       grp_id = 1:10,
+                       sex = rep(c("F", "M"), each = length(ages)),
+                       ages = rep(ages, times = 2),
+                       patient_wt = weights)
+
+hesim_data <- hesim_data(strategies, patients, states)
+
+labels <- get_labels(hesim_data)
+
+hesim_data
+```
+
+# Parameters
+
+-   See table in vignette for overview of transition parameters.
+
+    -   C: The complement of other probabilities in a given row
+    
+    -   omrPTHR: Operative mortality rate following primary THR
+
+    -   rr: Revision rate for prosthesis
+
+    -   mr: Age and sex-specific mortality rates
+  
+    -   omrRTHR: Operative mortality rate following revision THR
+
+    -   rrr: Re-revision rate
+
+-   Constant: omrPTHR, omrRTHR, rrr.
+
+-   Time-varying: rr, mr.
+
+
+```{r}
+load("mort_tbl.RData")
+mort_tbl
+```
+
+Revision rates, rr, were modelled using a proportional hazards Weibull model. The scale parameter was modelled as a function of age and indicators for male sex and and whether a new prosthesis was used. (see formulae)
+
+The coefficients from the regression model and the variance-covariance matrix used for the PSA are stored in rr_coef and rr_vcov, respectively.
+
+```{r}
+rr_coef <- tribble(
+  ~lngamma,       ~cons,        ~age,       ~male,        ~np1, 
+  0.3740968, -5.4909350,  -0.0367022,   0.7685360,  -1.3444740
+)
+```
+
+```{r}
+rr_vcov <- matrix(data = c(
+  0.002251512, -0.00569100,  2.800000e-08,  0.00000510,  0.0002590,
+  -0.005691000,  0.04321908, -7.830000e-04, -0.00724700, -0.0006420,
+  0.000000028, -0.00078300,  2.715661e-05,  0.00003300, -0.0001110,
+  0.000005100, -0.00724700,  3.300000e-05,  0.01189539,  0.0001840,
+  0.000259000, -0.00064200, -1.110000e-04,  0.00018400,  0.1463686
+), nrow = 5, ncol = 5)
+
+colnames(rr_vcov) <- rownames(rr_vcov) <- c("lngamma", "cons", "age", "male", "np1")
+rr_vcov
+```
+
+## Combining Parameters
+
+-   Note that utility and costs are added below.
+
+-   The standard prosthesis costs £394 while the new prosthesis costs £579. The model assumes that there are no ongoing medical costs.
+
+-   In a sample of 100 patients receiving primary THR 2 died implying that omrPTHR can be characterized by a beta distribution with α=2 and β=98. Similarly, in a sample of 100 patients experiencing a revision procedure, four patients had another procedure within one year suggesting that rrr can be characterized by a beta distribution with α=4 and β=96.
+
+-   omrRTHR was assumed to be the same as omrPTHR.
+
+-   Zero utility in the primary THR seems extreme?
+
+```{r}
+params <- list(
+  
+  # Transition Probabilities
+  
+    ## Operative mortality rate following primary THR
+  omrPTHR_shape1 = 2, # alpha
+  omrPTHR_shape2 = 98, # beta
+  
+    ## Revision rate for prosthesis
+  rr_coef = rr_coef,
+  rr_vcov = rr_vcov,
+  
+    ## Mortality rates
+  mr = mort_tbl,
+  
+    ## Operative mortality following revision THR - same as primary
+  omrRTHR_shape1 = 2, # alpha
+  omrPTHR_shape2 = 98, # beta
+
+    ## Re-revision rate
+  rrr_shape1 = 4, # alpha
+  rrr_shape2 = 96, # beta
+  
+  # Utility
+  
+  u_mean = c(PrimaryTHR = 0, SuccessP = .85, Revision = .30, SuccessR = .75),
+  u_se = c(PrimaryTHR = 0, SuccessP = .03, Revision = .03, SuccessR = .04),
+  
+  # Costs
+  
+  c_medical_mean <- c(PrimaryTHR = 0, SuccessP = 0, Revision = 5294, SuccessR = 0),
+  c_medical_se = c(PrimaryTHR = 0, SuccessP = 0, Revision = 1487, SuccessR = 0),
+  
+  c_Standard = 394,
+  c_NP1 = 579
+)
+```
+
+## PSA
+
+-   As noted above, omrPTHR, omrRTHR, and rrr are drawn from beta distributions.
+
+-   Similarly, utility is drawn from a beta distribution, but shape1 and shape2 are derived from the mean and standard error using the method of moments. 
+
+-   The mortality rate and the cost of the prostheses are assumed to be known with certainty. 
+
+-   The medical costs associated with health states are drawn from a gamma distribution, for which, like utility, the underlying parameters are derived from the mean and standard error using the method of moments. 
+
+-   Finally, the parameters of the Weibull survival model are drawn from a multivariate normal distribution using the point estimates and the variance-covariance matrix. 
+
+```{r}
+rng_def <- define_rng({
+  list(
+    omrPTHR = beta_rng(shape1 = omrPTHR_shape1, shape2 = omrPTHR_shape2),
+    
+    rr_coef = multi_normal_rng(mu = rr_coef, Sigma = rr_vcov),
+    
+    mr_male = fixed(mr$male, names = mr$age_lower),
+    mr_female = fixed(mr$female, names = mr$age_lower),
+    
+    omrRTHR = beta_rng(shape1 = omrRTHR_shape1, shape2 = omrRTHR_shape2),
+    
+    rrr = beta_rng(shape1 = rrr_shape1, shape2 = rrr_shape2),
+    
+    u = beta_rng(mean = u_mean, sd = u_se),
+    
+    c_medical = gamma_rng(mean = c_medical_mean, sd = c_medical_se),
+    c_Standard = c_Standard,
+    c_NP1 = c_NP1
+  )
+}, n = 500) # 500 iterations of PSA
+```
+
+## Transformed Parameters
+
+-   The sampled parameter values are “transformed” as a function of input data, which consists of all treatment strategy and patient combinations.
+
+```{r}
+input_data <- expand(hesim_data, by = c("strategies", "patients"))
+input_data
+```
+
+-   Separate transformation functions are used for the transition model and the cost/utility models. This is done for computational efficiency since only the transition model depends on cycle time. In the transition model, the revision rate (rr) depends on the scale and the shape parameters, which, in turn, depend on the sampled values of the parameters from the Weibull model. Mortality rate depends on sex and patient's age each cycle.
+
+```{r}
+transitions_def <- define_tparams({
+  
+  # Regression for revision risk
+  
+  scale <- exp(rr_coef$cons)
+})
+```
+
