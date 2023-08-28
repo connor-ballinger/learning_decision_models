@@ -25,7 +25,7 @@ The model is time-inhomogeneous because (i) the prosthesis survival time is mode
 
 ```{r}
 strategies <- data.table(strategy_id = 1:2,
-                         strategy_name = c("Strat1", "Strat2"))
+                         strategy_name = c("Standard prosthesis", "New prosthesis"))
 
 states <- data.table(state_id = 1:4,
                      state_name = c("Primary THR", "Successful Primary",
@@ -42,8 +42,8 @@ weights <- rep(age_weights, times = 2) * rep(sex_weights, each = length(ages))
 
 patients <- data.table(patient_id = 1:10, 
                        grp_id = 1:10,
-                       sex = rep(c("F", "M"), each = length(ages)),
-                       ages = rep(ages, times = 2),
+                       sex = rep(c("Female", "Male"), each = length(ages)),
+                       age = rep(ages, times = 2),
                        patient_wt = weights)
 
 hesim_data <- hesim_data(strategies, patients, states)
@@ -84,10 +84,22 @@ Revision rates, rr, were modelled using a proportional hazards Weibull model. Th
 The coefficients from the regression model and the variance-covariance matrix used for the PSA are stored in rr_coef and rr_vcov, respectively.
 
 ```{r}
-rr_coef <- tribble(
-  ~lngamma,       ~cons,        ~age,       ~male,        ~np1, 
-  0.3740968, -5.4909350,  -0.0367022,   0.7685360,  -1.3444740
-)
+# rr_coef <- tribble(
+#   ~lngamma,       ~cons,        ~age,       ~male,        ~np1, 
+#   0.3740968, -5.4909350,  -0.0367022,   0.7685360,  -1.3444740
+# )
+# rr_coef
+
+# rr_coef <- matrix(data = c(0.3740968, -5.4909350,  -0.0367022,   0.7685360,  -1.3444740), nrow = 1)
+# colnames(rr_coef) <- c("lngamma", "cons", "age", "male", "np1")
+# rr_coef
+
+
+rr_coef <- data.frame(lngamma = 0.3740968, cons = -5.4909350, age = -0.0367022,  male = 0.7685360, np1 = -1.3444740)
+rr_coef
+
+# rr_coef <- list("lngamma" = 0.3740968, "cons" = -5.4909350, "age" = -0.0367022,  "male" = 0.7685360, "np1" = -1.3444740)
+# rr_coef
 ```
 
 ```{r}
@@ -133,7 +145,7 @@ params <- list(
   
     ## Operative mortality following revision THR - same as primary
   omrRTHR_shape1 = 2, # alpha
-  omrPTHR_shape2 = 98, # beta
+  omrRTHR_shape2 = 98, # beta
 
     ## Re-revision rate
   rrr_shape1 = 4, # alpha
@@ -285,6 +297,6 @@ cost_args <- list(
   medical = list(method = "wlos")
 )
 
-econmod <- create_CohortDtstm(mod_def, input_data = input_data, cost_args = cost_args)
+econmod <- create_CohortDtstm(mod_def, input_data, cost_args = cost_args)
 ```
 

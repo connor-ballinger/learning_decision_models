@@ -26,7 +26,7 @@ registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
 -   Why are parameters include in the PSA if they aren't variable?
 
--   Not sure I understand the transformed parameters concept...
+-   Not sure I understand the transformed parameters concept... Is it just to apply treatment effects (and other changes which occur between treatment arms)?
 
 -   What is C in tpmatrix? See tparams documentation: C refers to the row-wise complement of the other probabilities i.e. it exists for convenience. Would it be safer to avoid using, and then receive errors if probabilities are incorrect?
 
@@ -91,6 +91,10 @@ rng_def <- define_rng({
 ```
 
 ## Tranformed Parameters
+
+-   In most statistical models, the underlying parameters are “transformed” into more relevant parameters for prediction. For instance, if a multinomial logistic regression is used parameterize transition probabilities, the coefficients are used to predict the probabilities.
+
+-   We will use the transformed parameter approach here by using define_tparams() to define tparams objects as a function of the underlying parameters and input data (treatment strategies and patients).
 
 ```{r}
 input_data <- expand(hesim_data, by = c("strategies", "patients"))

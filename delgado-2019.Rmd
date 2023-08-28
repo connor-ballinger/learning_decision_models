@@ -21,7 +21,9 @@ registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
 ```
 
--   Epithelial OC (90% of OC is used)
+# Overview
+
+-   Epithelial OC (90% of OC is used).
 
 -   3-state Markov (stable, progressed, death), stratified by the 4 stages. 
 
@@ -29,26 +31,155 @@ registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
 -   “The cycle length used was 3 weeks (21 days), which is the length of a chemotherapy cycle. Patients entered the model after they were diagnosed with EOC in the stable state. A cycle after, they can either remain stable, become worse, and move to a post-progression state, or die. Those who progress remain in a post-progression state until they die.” 
 
--   Used Heintz 2006 for survival. Heintz only provided 5-year survival data – Delgado extrapolated based on exponential distribution?
+-   Used Heintz 2006 for survival. Heintz only provided 5-year survival data – Delgado extrapolated based on exponential distribution? ie time-constant transition probabilities.
 
-# Model Structure
+-   Recall there may be no treatment effects applied - may just use Olaparib survival curves directly in an appropriate sub-population.
+
+# Following DARTH Framework
+
+## Structure
 
 ```{r}
+n_cycle_length <- 3 / 52 # 3 weeks
+n_cycles <- 10 * 52 / 3 # 10 years
+n_discount_rate <- 0.03
+
+v_names_states <- c("Stable", "Progressed", "Dead")
+v_names_stages <- c("I", "II", "III", "IV")
+```
+
+## Transitions
+
+-   Formulas in Delgado suggest probabilities vary over time, but they have assumed exponential so I'm not sure.
+
+```{r}
+n_bgr_mortality <- 0.001 # Place-holder
+
+v_median_pfs <- c(18.33, 6.25, 2.00, 1.60)
+v_median_os <- c(19.50, 7.50, 3.20, 1.90)
+
+v_lambda_pfs <- - log(0.5) / v_median_pfs
+v_3r_pfs <- v_lambda_pfs / (52/3) # change to 3-weekly rate
+v_p_pp <- 1 - exp(-v_3r_pfs)
+
+v_lambda_os <- - log(0.5) / (v_median_os - v_median_pfs)
+v_3r_os <- v_lambda_os / (52/3) # change to 3-weekly rate
+v_p_d <- 1 - exp(-v_3r_os)
+
+
+m_trans <- list(v_p_pp, v_p_d) |> 
+  pmap(\(x, y) matrix(data = c(
+    (1 - x - n_bgr_mortality), x, n_bgr_mortality,
+    0, (1 - y - n_bgr_mortality), y + n_bgr_mortality,
+    0, 0, 1
+  ), byrow = TRUE, nrow = 3, 
+  dimnames = list(c("S", "P", "D"), c("S", "P", "D"))))
+
+names(m_trans) <- v_names_stages
+m_trans
+```
+
+```{r}
+v_init_stages <- c(1155, 195, 1116, 681)
+v_init_states <- c(1, 0, 0) # all patients start in stable state
+
+m_trace <- v_names_stages |> 
+  map(\(x) matrix(as.numeric(NA), nrow = (n_cycles + 1), ncol = 3,
+                  dimnames = list(0:n_cycles, v_names_states)))
+names(m_trace) <- v_names_stages
+
+for (stage in v_names_stages) {
+  m_trace[[stage]][1, ] = v_init_states # subset matrix inside list
+}
+
+for (stage in v_names_stages) {
+  for (t in 1:n_cycles) {
+    m_trace[[stage]][t+1, ] <- m_trace[[stage]][t, ] %*% m_trans[[stage]]
+  }
+}
+
+
+for (stage in v_names_stages) {
+  m_trace[[stage]] <- as_tibble(m_trace[[stage]])
+  m_trace[[stage]]["cycle"] <- 0:n_cycles
+  m_trace[[stage]]["stage"] <- stage
+}
+
+df <- list_rbind(m_trace) |>
+  pivot_longer(cols = c(Stable, Progressed, Dead), names_to = "state", values_to = "prob") |> 
+  mutate(time = cycle / 50 * 3)
+
+
+ggplot(data = df) +
+  geom_line(aes(x = time, y = prob, colour = state, linetype = stage))
+
+```
+
+
+
+
+
+# Hesim
+
+-   Not ideal because Delgado's model had no PSA.
+
+## Model Structure
+
+```{r}
+strategies <- data.table(strategy_id = 1, 
+                         strategy_name = "Usual care")
 states <- data.table(state_id = 1:2,
-                     state = c("Stable", "Progressed"))
+                     state_name = )
+```
 
-stage <- data.table(stage_id = 1:4,
-                    stage = c("I", "II", "III", "IV"))
+## Patients
 
-mean_ages <- c(57.4, 62.4, 64.9, 68.1)
+```{r}
+patients <- data.table(patient_id = 1:4,
+                       grp_id = 1:4,
+                       stage = c("I", "II", "III", "IV"),
+                       age = c(57.4, 62.4, 64.9, 68.1))
 
+hesim_data <- hesim_data(strategies, patients, states)
+labels <- get_labels(hesim_data)
+
+```
+
+## Outcomes
+
+-   Using place-holder of 0.005 for background mortality.
+
+-   Need to change to correct cycle length.
+
+```{r}
 median_pfs <- c(18.33, 6.25, 2.00, 1.60)
 median_os <- c(19.50, 7.50, 3.20, 1.90)
 
-lambda_pfs <- - ln(0.5) / median_pfs
-p_pp <- 1 - exp(-lambda_pfs * time)
+tparams_def <- define_tparams({
+  
+  lambda_pfs <- - log(0.5) / median_pfs
+  p_pp <- 1 - exp(-lambda_pfs * time)
+  
+  lambda_os <- - log(0.5) / (median_os - median_pfs)
+  p_d <- 1 - exp(-lambda_os * time)
+  
+  # placeholder:
+  p_mr <- 0.005
+  
+  list(
+    tpmatrix = tpmatrix(
+      C,   p_pp, p_mr,
+      0,   C,    p_d + p_mr,
+      0,   0,    1
+    )
+  )
+}, times = 1:10)
 
-lambda_os <- - ln(0.5) / (median_os - median_pfs)
-p_d <- 1 - exp(-lambda_os * time)
+
+
+```
+
+```{r}
+mod_def <- define_model(tparams_def = tparams_def)
 ```
 
