@@ -35,6 +35,14 @@ registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
 -   Recall there may be no treatment effects applied - may just use Olaparib survival curves directly in an appropriate sub-population.
 
+# To do
+
+-   Need to do background mortality properly (place-holder used). Also, ages.
+
+-   Optionally, use population figures instead of existing probability (would require adding yearly cohort with pop growth too). Also, could add costs. Probably not worth it?
+
+-   Construct a critique, including any Aus contextual factors.
+
 # Following DARTH Framework
 
 ## Structure
@@ -107,11 +115,12 @@ for (stage in v_names_stages) {
 
 df <- list_rbind(m_trace) |>
   pivot_longer(cols = c(Stable, Progressed, Dead), names_to = "state", values_to = "prob") |> 
-  mutate(time = cycle / 50 * 3)
+  mutate(time = cycle / 52 * 3)
 
 
 ggplot(data = df) +
   geom_line(aes(x = time, y = prob, colour = state, linetype = stage))
+
 
 ```
 
@@ -121,7 +130,7 @@ ggplot(data = df) +
 
 # Hesim
 
--   Not ideal because Delgado's model had no PSA.
+-   Not ideal because Delgado's model had no PSA. Leave here for now, may be useful if I want to make Delgado prob.
 
 ## Model Structure
 
