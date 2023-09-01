@@ -9,9 +9,9 @@ output: conr::format_html
 ```{r, warning=FALSE, message=FALSE}
 # knitr::opts_chunk$set()
 
-library(here)
+# library(here)
 library(tidyverse)
-library(knitr)
+# library(knitr)
 # library(hesim)
 # library(data.table)
 
@@ -35,7 +35,9 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   Recall there may be no treatment effects applied - may just use Olaparib survival curves directly in an appropriate sub-population.
 
--   Note that age-specific probabilities of death (incorporating OC and background mortality) are not equal to P(OC_death) + P(bgr_death). Need to add the two rates together before converting to a probability. (Note that there is no added mortality risk for stable state)
+-   Note that age-specific probabilities of death (incorporating OC and background mortality) are not equal to P(OC_death) + P(bgr_death). **Need to add the two rates together before converting to a probability**. (Note that there is no added mortality risk for stable state)
+
+    -   Add 2 rates and then calculate probability, or calculate probabilities and add? Delgado uses the latter.
 
 # To do
 
@@ -46,6 +48,8 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 -   Could add costs. Probably not worth it?
 
 -   Construct a critique, including any Aus contextual factors.
+
+-   Add equations.
 
 # Following DARTH Framework (Alarid 2023)
 
@@ -125,10 +129,21 @@ df_rates <- tibble(stage = v_names_stages,
                    rate_pfs = v_3r_pfs,
                    rate_os = v_3r_os)
 
-df_bgr_mort |> 
-  left_join(df_rates[, c("stage", "rate_os")], by = "stage") |> 
-  mutate(rate_death = rate_bgr_mort + rate_os,
-         prob_death = 1 - exp(-rate_death))
+df_prob <- df_bgr_mort |> 
+  left_join(df_rates, by = "stage") |> # [, c("stage", "rate_os")]
+  mutate(across(.cols = starts_with("rate"),
+                .fns = ~ 1 - exp(-.x),
+                .names = "prob_{.col}")) |> 
+  rename_with(.fn = ~ sub("_rate", "", .x), .cols = everything()) |> 
+  mutate(prob_s_p = prob_pfs,
+         prob_s_d = prob_bgr_mort,
+         prob_p_d = prob_os + prob_bgr_mort) |> 
+  select(cycle, stage, prob_s_p, prob_s_d, prob_p_d)
+df_prob
+
+# prob_s_p = prob_pfs
+# prob_s_d = prob_bgr_mort
+# prob_p_d = prob_os + prob_bgr_mort
 ```
 
 
