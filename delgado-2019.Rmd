@@ -12,12 +12,12 @@ output: conr::format_html
 library(here)
 library(tidyverse)
 library(knitr)
-library(hesim)
-library(data.table)
+# library(hesim)
+# library(data.table)
 
-registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
+# registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
-# theme_set(theme_bw() + theme(legend.position = "bottom"))
+theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 ```
 
@@ -35,15 +35,19 @@ registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
 -   Recall there may be no treatment effects applied - may just use Olaparib survival curves directly in an appropriate sub-population.
 
+-   Note that age-specific probabilities of death (incorporating OC and background mortality) are not equal to P(OC_death) + P(bgr_death). Need to add the two rates together before converting to a probability. (Note that there is no added mortality risk for stable state)
+
 # To do
 
 -   Need to do background mortality properly (place-holder used). Also, ages.
 
--   Optionally, use population figures instead of existing probability (would require adding yearly cohort with pop growth too). Also, could add costs. Probably not worth it?
+-   Optionally, use population figures instead of existing probability (would require adding yearly cohort with pop growth too). 
+
+-   Could add costs. Probably not worth it?
 
 -   Construct a critique, including any Aus contextual factors.
 
-# Following DARTH Framework
+# Following DARTH Framework (Alarid 2023)
 
 ## Structure
 
@@ -56,26 +60,111 @@ v_names_states <- c("Stable", "Progressed", "Dead")
 v_names_stages <- c("I", "II", "III", "IV")
 ```
 
+## Patients
+
+```{r}
+# v_mean_ages <- c(57.4, 62.4, 64.9, 68.1)
+# v_mean_ages <- round(v_mean_ages) # harmless simplification
+```
+
+
 ## Transitions
 
 -   Formulas in Delgado suggest probabilities vary over time, but they have assumed exponential so I'm not sure.
 
-```{r}
-n_bgr_mortality <- 0.001 # Place-holder
+### Background Mortality
 
+-   Hmmm... tricky to separate this from other transition rates...
+
+```{r}
+# n_bgr_mortality <- 0.001 # Place-holder
+
+life_table <- readxl::read_xlsx("abs_life_tables_2019-2021.xlsx", 
+                                sheet = "Table_1.9",
+                                skip = 6)
+life_table <- life_table |> 
+  select(Age, rate...7) |> 
+  rename(age = Age, rate_annual_mort = rate...7)
+
+# convert annual rate to 3-weekly rate, DO NOT convert rate to probability - rates need to be summed first
+
+life_table <- life_table |> 
+  mutate(age = as.integer(age),
+         rate_bgr_mort = rate_annual_mort / (52/3)) |> 
+  filter(age > 55) |> 
+  select(age, rate_bgr_mort)
+
+# ignore NA warning, that is due to ABS adding text below data
+
+# convert to simple matrix
+
+df_ages <- data.frame(cycle = 0:n_cycles, I = 57.4, II = 62.4, III = 64.9, IV = 68.1)
+df_ages <- df_ages |>
+  mutate(across(I:IV, ~ round(cycle / (52/3) + .x)))
+df_ages_long <- df_ages |>
+  pivot_longer(cols = -cycle, names_to = "stage", values_to = "age", cols_vary = "slowest")
+df_ages_long
+
+df_bgr_mort <- df_ages_long |> 
+  left_join(life_table, by = "age")
+```
+
+-   Need to get other mortality rate (and that requires pfs rate).
+
+```{r}
 v_median_pfs <- c(18.33, 6.25, 2.00, 1.60)
 v_median_os <- c(19.50, 7.50, 3.20, 1.90)
 
 v_lambda_pfs <- - log(0.5) / v_median_pfs
-v_3r_pfs <- v_lambda_pfs / (52/3) # change to 3-weekly rate
-v_p_pp <- 1 - exp(-v_3r_pfs)
+v_3r_pfs <- v_lambda_pfs / (52/3) # 3-weekly rate
 
 v_lambda_os <- - log(0.5) / (v_median_os - v_median_pfs)
-v_3r_os <- v_lambda_os / (52/3) # change to 3-weekly rate
+v_3r_os <- v_lambda_os / (52/3) # 3-weekly rate
+
+df_rates <- tibble(stage = v_names_stages,
+                   rate_pfs = v_3r_pfs,
+                   rate_os = v_3r_os)
+
+df_bgr_mort |> 
+  left_join(df_rates[, c("stage", "rate_os")], by = "stage") |> 
+  mutate(rate_death = rate_bgr_mort + rate_os,
+         prob_death = 1 - exp(-rate_death))
+```
+
+
+
+
+
+```{r}
+names(v_p_d) <- v_names_stages
+df_enframe(v_p_d)
+
+df_ages_long |> 
+  left_join(life_table) |> 
+  left_join()
+
+df_bgr_mort <- left_join(df_ages_long, life_table, by = c("age" = "age")) |> 
+  select(-age) |> 
+  pivot_wider(names_from = stage, values_from = prob)
+
+m_bgr_mort <- as.matrix(df_bgr_mort)
+m_bgr_mort
+```
+
+
+```{r}
+
+
+# v_lambda_pfs <- - log(0.5) / v_median_pfs
+# v_3r_pfs <- v_lambda_pfs / (52/3) # change to 3-weekly rate
+v_s_p <- 1 - exp(-v_3r_pfs)
+
+# v_lambda_os <- - log(0.5) / (v_median_os - v_median_pfs)
+# v_3r_os <- v_lambda_os / (52/3) # change to 3-weekly rate
 v_p_d <- 1 - exp(-v_3r_os)
 
 
-m_trans <- list(v_p_pp, v_p_d) |> 
+m_trans <- list(v_s_p, v_p_d) |> 
   pmap(\(x, y) matrix(data = c(
     (1 - x - n_bgr_mortality), x, n_bgr_mortality,
     0, (1 - y - n_bgr_mortality), y + n_bgr_mortality,
@@ -86,6 +175,26 @@ m_trans <- list(v_p_pp, v_p_d) |>
 names(m_trans) <- v_names_stages
 m_trans
 ```
+
+```{r}
+# deal with t = 0 for now
+a_trans <- array(data = NA,
+                 dim = c(3, 3, 4),
+                 dimnames = list(v_names_states, v_names_states, v_names_stages))
+# changed names to reflect from - to characteristics
+
+
+a_trans["Stable", "Progressed", ] <- v_s_p
+diag(a_trans[1, , ])
+
+head(m_bgr_mort)
+
+print(a_trans)
+```
+
+
+
+## Construct Trace
 
 ```{r}
 v_init_stages <- c(1155, 195, 1116, 681)
@@ -105,8 +214,11 @@ for (stage in v_names_stages) {
     m_trace[[stage]][t+1, ] <- m_trace[[stage]][t, ] %*% m_trans[[stage]]
   }
 }
+```
 
+## Gather Results
 
+```{r}
 for (stage in v_names_stages) {
   m_trace[[stage]] <- as_tibble(m_trace[[stage]])
   m_trace[[stage]]["cycle"] <- 0:n_cycles
