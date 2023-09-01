@@ -141,9 +141,34 @@ df_prob <- df_bgr_mort |>
   select(cycle, stage, prob_s_p, prob_s_d, prob_p_d)
 df_prob
 
-# prob_s_p = prob_pfs
-# prob_s_d = prob_bgr_mort
-# prob_p_d = prob_os + prob_bgr_mort
+# Convert to array
+
+split(df_prob, df_prob$stage)
+
+df_prob[, c("cycle", "prob_s_p", "prob_s_d", "prob_p_d")]
+
+
+a_prob <- array(data = as.double(NA), 
+                dim = c(3, 3, 4, 174), 
+                dimnames = list("from" = v_names_states, 
+                                "to" = v_names_states,
+                                "stage" = v_names_stages,
+                                "cycle" = 0:n_cycles))
+str(a_prob)
+a_prob["Dead", "Stable", , ] <- 
+  a_prob["Dead", "Progressed", , ] <- 
+  a_prob["Progressed", "Stable", , ] <- 0
+
+a_prob["Dead", "Dead", , ] <- 1
+
+
+
+
+
+a_prob[, , "I", "0"]
+
+list(v_names_stages, 0:n_cycles) |> 
+  pmap(\(x, y) a_prob["Stable", "Progressed", x, y] = df_prob[df_prob$stage == x & df_prob$cycle == y, "prob_s_p"])
 ```
 
 
@@ -151,19 +176,19 @@ df_prob
 
 
 ```{r}
-names(v_p_d) <- v_names_stages
-df_enframe(v_p_d)
-
-df_ages_long |> 
-  left_join(life_table) |> 
-  left_join()
-
-df_bgr_mort <- left_join(df_ages_long, life_table, by = c("age" = "age")) |> 
-  select(-age) |> 
-  pivot_wider(names_from = stage, values_from = prob)
-
-m_bgr_mort <- as.matrix(df_bgr_mort)
-m_bgr_mort
+# names(v_p_d) <- v_names_stages
+# df_enframe(v_p_d)
+# 
+# df_ages_long |> 
+#   left_join(life_table) |> 
+#   left_join()
+# 
+# df_bgr_mort <- left_join(df_ages_long, life_table, by = c("age" = "age")) |> 
+#   select(-age) |> 
+#   pivot_wider(names_from = stage, values_from = prob)
+# 
+# m_bgr_mort <- as.matrix(df_bgr_mort)
+# m_bgr_mort
 ```
 
 
@@ -172,11 +197,11 @@ m_bgr_mort
 
 # v_lambda_pfs <- - log(0.5) / v_median_pfs
 # v_3r_pfs <- v_lambda_pfs / (52/3) # change to 3-weekly rate
-v_s_p <- 1 - exp(-v_3r_pfs)
+# v_s_p <- 1 - exp(-v_3r_pfs)
 
 # v_lambda_os <- - log(0.5) / (v_median_os - v_median_pfs)
 # v_3r_os <- v_lambda_os / (52/3) # change to 3-weekly rate
-v_p_d <- 1 - exp(-v_3r_os)
+# v_p_d <- 1 - exp(-v_3r_os)
 
 
 m_trans <- list(v_s_p, v_p_d) |> 
