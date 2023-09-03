@@ -17,7 +17,7 @@ library(tidyverse)
 
 # registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
-theme_set(theme_bw() + theme(legend.position = "bottom"))
+# theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 ```
 
@@ -41,11 +41,11 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 # To do
 
--   Need to do background mortality properly (place-holder used). Also, ages.
+-   Need to do background mortality properly (place-holder used).
 
 -   Optionally, use population figures instead of existing probability (would require adding yearly cohort with pop growth too). 
 
--   Could add costs. Probably not worth it?
+-   Definitely add costs.
 
 -   Construct a critique, including any Aus contextual factors.
 
@@ -100,7 +100,11 @@ life_table <- life_table |>
 
 # ignore NA warning, that is due to ABS adding text below data
 
-# convert to simple matrix
+v_rate_bgr_mort <- as.vector(life_table$rate_bgr_mort, mode = "double")
+names(v_rate_bgr_mort) <- as.vector(life_table$age, mode = "character")
+str(v_rate_bgr_mort)  
+
+
 
 df_ages <- data.frame(cycle = 0:n_cycles, I = 57.4, II = 62.4, III = 64.9, IV = 68.1)
 df_ages <- df_ages |>
@@ -143,7 +147,7 @@ df_prob
 
 # Convert to array
 
-split(df_prob, df_prob$stage)
+df_prob_stages <- split(df_prob, df_prob$stage)
 
 df_prob[, c("cycle", "prob_s_p", "prob_s_d", "prob_p_d")]
 
@@ -161,11 +165,10 @@ a_prob["Dead", "Stable", , ] <-
 
 a_prob["Dead", "Dead", , ] <- 1
 
+a_prob["Stable", "Progressed", "I", ] <- as.vector(df_prob_stages[[1]][, "prob_s_p"]) # this is not a vector for some reason.
 
 
-
-
-a_prob[, , "I", "0"]
+a_prob[, , , "0"]
 
 list(v_names_stages, 0:n_cycles) |> 
   pmap(\(x, y) a_prob["Stable", "Progressed", x, y] = df_prob[df_prob$stage == x & df_prob$cycle == y, "prob_s_p"])
