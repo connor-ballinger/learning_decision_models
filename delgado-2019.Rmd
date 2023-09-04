@@ -1,12 +1,12 @@
 ---
-title: "Title"
+title: "Ovarian Cancer in Spain: Delgado-Ortega 2019"
 date: "`r conr::format_date()`"
 author: "Connor Ballinger"
 knit: conr::write_and_date
 output: conr::format_html
 ---
 
-```{r}
+```{r, warning=FALSE, message=FALSE}
 # knitr::opts_chunk$set()
 
 # library(here)
@@ -17,7 +17,7 @@ library(tidyverse)
 
 # registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
-# theme_set(theme_bw() + theme(legend.position = "bottom"))
+theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 ```
 
@@ -57,7 +57,7 @@ library(tidyverse)
 
 ```{r}
 n_cycle_length <- 3 / 52 # 3 weeks
-n_cycles <- 10 * 52 / 3 # 10 years
+n_cycles <- round(10 * 52 / 3) # 10 years
 n_discount_rate <- 0.03
 
 v_names_states <- c("Stable", "Progressed", "Dead")
@@ -67,22 +67,29 @@ v_names_stages <- c("I", "II", "III", "IV")
 ## Patients
 
 ```{r}
-# v_mean_ages <- c(57.4, 62.4, 64.9, 68.1)
-# v_mean_ages <- round(v_mean_ages) # harmless simplification
-```
+df_ages <- data.frame(cycle = 0:n_cycles, 
+                      I = 57.4, 
+                      II = 62.4, 
+                      III = 64.9, 
+                      IV = 68.1)
+df_ages <- df_ages |>
+  mutate(across(I:IV, ~ round(cycle / (52/3) + .x)))
 
+df_ages_long <- df_ages |>
+  pivot_longer(cols = -cycle, names_to = "stage", 
+               values_to = "age", cols_vary = "slowest")
+
+```
 
 ## Transitions
 
--   Formulas in Delgado suggest probabilities vary over time, but they have assumed exponential so I'm not sure.
+-   Formulas in Delgado suggest probabilities vary over time, but they have assumed exponential so I don't see how.
 
 ### Background Mortality
 
--   Hmmm... tricky to separate this from other transition rates...
+-   Tricky to separate this from other transition rates...
 
 ```{r}
-# n_bgr_mortality <- 0.001 # Place-holder
-
 life_table <- readxl::read_xlsx("abs_life_tables_2019-2021.xlsx", 
                                 sheet = "Table_1.9",
                                 skip = 6)
@@ -90,7 +97,7 @@ life_table <- life_table |>
   select(Age, rate...7) |> 
   rename(age = Age, rate_annual_mort = rate...7)
 
-# convert annual rate to 3-weekly rate, DO NOT convert rate to probability - rates need to be summed first
+# convert annual rate to 3-weekly rate
 
 life_table <- life_table |> 
   mutate(age = as.integer(age),
@@ -99,20 +106,6 @@ life_table <- life_table |>
   select(age, rate_bgr_mort)
 
 # ignore NA warning, that is due to ABS adding text below data
-
-v_rate_bgr_mort <- as.vector(life_table$rate_bgr_mort, mode = "double")
-names(v_rate_bgr_mort) <- as.vector(life_table$age, mode = "character")
-# str(v_rate_bgr_mort)  
-# v_rate_bgr_mort[["56"]]
-
-# make array with three dimensions? cycle, bgr_mort, stage?
-
-df_ages <- data.frame(cycle = 0:n_cycles, I = 57.4, II = 62.4, III = 64.9, IV = 68.1)
-df_ages <- df_ages |>
-  mutate(across(I:IV, ~ round(cycle / (52/3) + .x)))
-df_ages_long <- df_ages |>
-  pivot_longer(cols = -cycle, names_to = "stage", values_to = "age", cols_vary = "slowest")
-df_ages_long
 
 df_bgr_mort <- df_ages_long |> 
   left_join(life_table, by = "age")
@@ -135,7 +128,7 @@ df_rates <- tibble(stage = v_names_stages,
                    rate_os = v_3r_os)
 
 df_prob <- df_bgr_mort |> 
-  left_join(df_rates, by = "stage") |> # [, c("stage", "rate_os")]
+  left_join(df_rates, by = "stage") |> 
   mutate(across(.cols = starts_with("rate"),
                 .fns = ~ 1 - exp(-.x),
                 .names = "prob_{.col}")) |> 
@@ -144,15 +137,18 @@ df_prob <- df_bgr_mort |>
          prob_s_d = prob_bgr_mort,
          prob_p_d = prob_os + prob_bgr_mort) |> 
   select(cycle, stage, prob_s_p, prob_s_d, prob_p_d)
-df_prob
+
 ```
 
 -   Convert to array.
 
 ```{r}
+# Split df_prob by Stage
 
 df_prob_stages <- split(df_prob, df_prob$stage)
 names(df_prob_stages) <- v_names_stages
+
+# Initialise probability array
 
 a_prob <- array(data = as.double(NA), 
                 dim = c(3, 3, 4, (n_cycles+1)), 
@@ -160,35 +156,53 @@ a_prob <- array(data = as.double(NA),
                                 "to" = v_names_states,
                                 "stage" = v_names_stages,
                                 "cycle" = 0:n_cycles))
-str(a_prob)
+# Prevent some transitions
+
 a_prob["Dead", "Stable", , ] <- 
   a_prob["Dead", "Progressed", , ] <- 
   a_prob["Progressed", "Stable", , ] <- 0
 
+# Dead stay dead
+
 a_prob["Dead", "Dead", , ] <- 1
 
-v_names_stages |> 
-  walk(\(x) a_prob["Stable", "Progressed", x, ] <<- df_prob_stages[[x]]$prob_s_p)
-v_names_stages |> 
-  walk(\(x) a_prob["Stable", "Dead", x, ] <<-  df_prob_stages[[x]]$prob_s_d)
-v_names_stages |> 
-  walk(\(x) a_prob["Progressed", "Dead", x, ] <<- df_prob_stages[[x]]$prob_p_d)
+# Use walk fn such that assignments made for each Stage
 
+# S to P
 v_names_stages |> 
-  walk(\(x) a_prob["Stable", "Stable", x, ] <<- 1 - a_prob["Stable", "Progressed", x, ] - a_prob["Stable", "Dead", x, ])
+  walk(\(x) a_prob["Stable", "Progressed", x, ] <<- 
+         df_prob_stages[[x]]$prob_s_p)
+
+# S to D
 v_names_stages |> 
-  walk(\(x) a_prob["Progressed", "Progressed", x, ] <<- 1 - a_prob["Progressed", "Dead", x, ])
+  walk(\(x) a_prob["Stable", "Dead", x, ] <<-  
+         df_prob_stages[[x]]$prob_s_d)
+
+# P to D
+v_names_stages |> 
+  walk(\(x) a_prob["Progressed", "Dead", x, ] <<- 
+         df_prob_stages[[x]]$prob_p_d)
+
+# S to S means neither S to P nor S to D occur
+v_names_stages |> 
+  walk(\(x) a_prob["Stable", "Stable", x, ] <<- 
+         (1 - a_prob["Stable", "Progressed", x, ] - 
+            a_prob["Stable", "Dead", x, ]))
+
+# P to P means P to D does not occur
+v_names_stages |> 
+  walk(\(x) a_prob["Progressed", "Progressed", x, ] <<- 
+         (1 - a_prob["Progressed", "Dead", x, ]))
 
 
-a_prob[, , , "0"]
+a_prob[, , , 174]
 ```
 
 ## Construct Trace
 
-
 ```{r}
-# v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
-v_init_stages <- c(0.37, 0.06, 0.35, 0.22) # rough portions
+v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
+# v_init_stages <- c(0.37, 0.06, 0.35, 0.22) # rough portions
 v_init_states <- c(1, 0, 0) # all patients start in stable state
 
 a_trace <- array(data = NA, 
@@ -201,33 +215,30 @@ a_trace[, , "0"] <- v_init_states %o% v_init_stages
 
 
 for (stage in v_names_stages) {
-  for (t in 2:n_cycles) { # indexing by integer when cycle names is a string. Could use dimnames but I need t-1...
+  for (t in 2:(n_cycles + 1)) { # indexing by integer, not cycle name. cycle_name = integer - 1.
     a_trace[, stage, t] <- a_trace[, stage, t-1] %*% a_prob[, , stage, t]
   }
 }
-
-colSums(a_trace[, , "170"])
 
 ```
 
 ## Gather Results
 
 ```{r}
-for (stage in v_names_stages) {
-  m_trace[[stage]] <- as_tibble(m_trace[[stage]])
-  m_trace[[stage]]["cycle"] <- 0:n_cycles
-  m_trace[[stage]]["stage"] <- stage
-}
 
-df <- list_rbind(m_trace) |>
-  pivot_longer(cols = c(Stable, Progressed, Dead), names_to = "state", values_to = "prob") |> 
-  mutate(time = cycle / 52 * 3)
-
+df <- as.data.frame(aperm(a_trace)) |>
+  mutate(Cycle = 0:n_cycles) |> 
+  pivot_longer(cols = 1:12, 
+               names_to = c("Stage", "State"),
+               names_sep = "\\.",
+               values_to = "N") |> 
+  mutate(State = factor(State, 
+                        levels = c("Stable", "Progressed", "Dead"), 
+                        ordered = TRUE))
 
 ggplot(data = df) +
-  geom_line(aes(x = time, y = prob, colour = state, linetype = stage))
-
-
+  geom_line(aes(x = Cycle, y = N, colour = Stage)) +
+  facet_wrap(vars(State))
 ```
 
 
