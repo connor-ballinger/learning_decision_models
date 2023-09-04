@@ -155,7 +155,7 @@ df_prob_stages <- split(df_prob, df_prob$stage)
 names(df_prob_stages) <- v_names_stages
 
 a_prob <- array(data = as.double(NA), 
-                dim = c(3, 3, 4, 174), 
+                dim = c(3, 3, 4, (n_cycles+1)), 
                 dimnames = list("from" = v_names_states, 
                                 "to" = v_names_states,
                                 "stage" = v_names_stages,
@@ -187,28 +187,27 @@ a_prob[, , , "0"]
 
 
 ```{r}
-
-```
-
-
-```{r}
-v_init_stages <- c(1155, 195, 1116, 681)
+# v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
+v_init_stages <- c(0.37, 0.06, 0.35, 0.22) # rough portions
 v_init_states <- c(1, 0, 0) # all patients start in stable state
 
-m_trace <- v_names_stages |> 
-  map(\(x) matrix(as.numeric(NA), nrow = (n_cycles + 1), ncol = 3,
-                  dimnames = list(0:n_cycles, v_names_states)))
-names(m_trace) <- v_names_stages
+a_trace <- array(data = NA, 
+               dim = c(3, 4, n_cycles+1), 
+               dimnames = list("state" = v_names_states,
+                               "stage" = v_names_stages,
+                               "cycle" = 0:n_cycles))
+
+a_trace[, , "0"] <- v_init_states %o% v_init_stages
+
 
 for (stage in v_names_stages) {
-  m_trace[[stage]][1, ] = v_init_states # subset matrix inside list
-}
-
-for (stage in v_names_stages) {
-  for (t in 1:n_cycles) {
-    m_trace[[stage]][t+1, ] <- m_trace[[stage]][t, ] %*% m_trans[[stage]]
+  for (t in 2:n_cycles) { # indexing by integer when cycle names is a string. Could use dimnames but I need t-1...
+    a_trace[, stage, t] <- a_trace[, stage, t-1] %*% a_prob[, , stage, t]
   }
 }
+
+colSums(a_trace[, , "170"])
+
 ```
 
 ## Gather Results
