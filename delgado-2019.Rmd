@@ -6,7 +6,7 @@ knit: conr::write_and_date
 output: conr::format_html
 ---
 
-```{r, warning=FALSE, message=FALSE}
+```{r}
 # knitr::opts_chunk$set()
 
 # library(here)
@@ -102,9 +102,10 @@ life_table <- life_table |>
 
 v_rate_bgr_mort <- as.vector(life_table$rate_bgr_mort, mode = "double")
 names(v_rate_bgr_mort) <- as.vector(life_table$age, mode = "character")
-str(v_rate_bgr_mort)  
+# str(v_rate_bgr_mort)  
+# v_rate_bgr_mort[["56"]]
 
-
+# make array with three dimensions? cycle, bgr_mort, stage?
 
 df_ages <- data.frame(cycle = 0:n_cycles, I = 57.4, II = 62.4, III = 64.9, IV = 68.1)
 df_ages <- df_ages |>
@@ -144,13 +145,14 @@ df_prob <- df_bgr_mort |>
          prob_p_d = prob_os + prob_bgr_mort) |> 
   select(cycle, stage, prob_s_p, prob_s_d, prob_p_d)
 df_prob
+```
 
-# Convert to array
+-   Convert to array.
+
+```{r}
 
 df_prob_stages <- split(df_prob, df_prob$stage)
-
-df_prob[, c("cycle", "prob_s_p", "prob_s_d", "prob_p_d")]
-
+names(df_prob_stages) <- v_names_stages
 
 a_prob <- array(data = as.double(NA), 
                 dim = c(3, 3, 4, 174), 
@@ -165,79 +167,29 @@ a_prob["Dead", "Stable", , ] <-
 
 a_prob["Dead", "Dead", , ] <- 1
 
-a_prob["Stable", "Progressed", "I", ] <- as.vector(df_prob_stages[[1]][, "prob_s_p"]) # this is not a vector for some reason.
+v_names_stages |> 
+  walk(\(x) a_prob["Stable", "Progressed", x, ] <<- df_prob_stages[[x]]$prob_s_p)
+v_names_stages |> 
+  walk(\(x) a_prob["Stable", "Dead", x, ] <<-  df_prob_stages[[x]]$prob_s_d)
+v_names_stages |> 
+  walk(\(x) a_prob["Progressed", "Dead", x, ] <<- df_prob_stages[[x]]$prob_p_d)
+
+v_names_stages |> 
+  walk(\(x) a_prob["Stable", "Stable", x, ] <<- 1 - a_prob["Stable", "Progressed", x, ] - a_prob["Stable", "Dead", x, ])
+v_names_stages |> 
+  walk(\(x) a_prob["Progressed", "Progressed", x, ] <<- 1 - a_prob["Progressed", "Dead", x, ])
 
 
 a_prob[, , , "0"]
-
-list(v_names_stages, 0:n_cycles) |> 
-  pmap(\(x, y) a_prob["Stable", "Progressed", x, y] = df_prob[df_prob$stage == x & df_prob$cycle == y, "prob_s_p"])
 ```
-
-
-
-
-
-```{r}
-# names(v_p_d) <- v_names_stages
-# df_enframe(v_p_d)
-# 
-# df_ages_long |> 
-#   left_join(life_table) |> 
-#   left_join()
-# 
-# df_bgr_mort <- left_join(df_ages_long, life_table, by = c("age" = "age")) |> 
-#   select(-age) |> 
-#   pivot_wider(names_from = stage, values_from = prob)
-# 
-# m_bgr_mort <- as.matrix(df_bgr_mort)
-# m_bgr_mort
-```
-
-
-```{r}
-
-
-# v_lambda_pfs <- - log(0.5) / v_median_pfs
-# v_3r_pfs <- v_lambda_pfs / (52/3) # change to 3-weekly rate
-# v_s_p <- 1 - exp(-v_3r_pfs)
-
-# v_lambda_os <- - log(0.5) / (v_median_os - v_median_pfs)
-# v_3r_os <- v_lambda_os / (52/3) # change to 3-weekly rate
-# v_p_d <- 1 - exp(-v_3r_os)
-
-
-m_trans <- list(v_s_p, v_p_d) |> 
-  pmap(\(x, y) matrix(data = c(
-    (1 - x - n_bgr_mortality), x, n_bgr_mortality,
-    0, (1 - y - n_bgr_mortality), y + n_bgr_mortality,
-    0, 0, 1
-  ), byrow = TRUE, nrow = 3, 
-  dimnames = list(c("S", "P", "D"), c("S", "P", "D"))))
-
-names(m_trans) <- v_names_stages
-m_trans
-```
-
-```{r}
-# deal with t = 0 for now
-a_trans <- array(data = NA,
-                 dim = c(3, 3, 4),
-                 dimnames = list(v_names_states, v_names_states, v_names_stages))
-# changed names to reflect from - to characteristics
-
-
-a_trans["Stable", "Progressed", ] <- v_s_p
-diag(a_trans[1, , ])
-
-head(m_bgr_mort)
-
-print(a_trans)
-```
-
-
 
 ## Construct Trace
+
+
+```{r}
+
+```
+
 
 ```{r}
 v_init_stages <- c(1155, 195, 1116, 681)
