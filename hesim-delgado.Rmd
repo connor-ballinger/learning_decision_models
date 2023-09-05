@@ -1,0 +1,70 @@
+---
+title: "Untitled"
+author: "Connor Ballinger"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Hesim: Delgado 2019
+
+-   Not ideal because Delgado's model had no PSA. Leave here for now, may be useful if I want to make Delgado prob.
+
+## Model Structure
+
+```{r}
+strategies <- data.table(strategy_id = 1, 
+                         strategy_name = "Usual care")
+states <- data.table(state_id = 1:2,
+                     state_name = )
+```
+
+## Patients
+
+```{r}
+patients <- data.table(patient_id = 1:4,
+                       grp_id = 1:4,
+                       stage = c("I", "II", "III", "IV"),
+                       age = c(57.4, 62.4, 64.9, 68.1))
+
+hesim_data <- hesim_data(strategies, patients, states)
+labels <- get_labels(hesim_data)
+
+```
+
+## Outcomes
+
+-   Using place-holder of 0.005 for background mortality.
+
+-   Need to change to correct cycle length.
+
+```{r}
+median_pfs <- c(18.33, 6.25, 2.00, 1.60)
+median_os <- c(19.50, 7.50, 3.20, 1.90)
+
+tparams_def <- define_tparams({
+  
+  lambda_pfs <- - log(0.5) / median_pfs
+  p_pp <- 1 - exp(-lambda_pfs * time)
+  
+  lambda_os <- - log(0.5) / (median_os - median_pfs)
+  p_d <- 1 - exp(-lambda_os * time)
+  
+  # placeholder:
+  p_mr <- 0.005
+  
+  list(
+    tpmatrix = tpmatrix(
+      C,   p_pp, p_mr,
+      0,   C,    p_d + p_mr,
+      0,   0,    1
+    )
+  )
+}, times = 1:10)
+
+
+
+```
+
+```{r}
+mod_def <- define_model(tparams_def = tparams_def)
+```

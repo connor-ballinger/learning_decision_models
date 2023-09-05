@@ -31,21 +31,19 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   “The cycle length used was 3 weeks (21 days), which is the length of a chemotherapy cycle. Patients entered the model after they were diagnosed with EOC in the stable state. A cycle after, they can either remain stable, become worse, and move to a post-progression state, or die. Those who progress remain in a post-progression state until they die.” 
 
--   Used Heintz 2006 for survival. Heintz only provided 5-year survival data – Delgado extrapolated based on exponential distribution? ie time-constant transition probabilities.
+-   Used Heintz 2006 for survival. Heintz only provided 5-year survival data – Delgado extrapolated based on exponential distribution ie time-constant transition probabilities.
 
 -   Recall there may be no treatment effects applied - may just use Olaparib survival curves directly in an appropriate sub-population.
 
--   Note that age-specific probabilities of death (incorporating OC and background mortality) are not equal to P(OC_death) + P(bgr_death). **Need to add the two rates together before converting to a probability**. (Note that there is no added mortality risk for stable state)
+-   Note age-specific probabilities of death (incorporating OC mortality rate and background mortality rate).
 
-    -   Add 2 rates and then calculate probability, or calculate probabilities and add? Delgado uses the latter.
+    -   Add 2 rates and then calculate probability, or calculate probabilities and add? Delgado uses the latter. Always the latter.
 
 # To do
 
--   Need to do background mortality properly (place-holder used).
+-   Add yearly cohort with pop growth too. 
 
--   Optionally, use population figures instead of existing probability (would require adding yearly cohort with pop growth too). 
-
--   Definitely add costs.
+-   Add costs.
 
 -   Construct a critique, including any Aus contextual factors.
 
@@ -58,7 +56,6 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 ```{r}
 n_cycle_length <- 3 / 52 # 3 weeks
 n_cycles <- round(10 * 52 / 3) # 10 years
-n_discount_rate <- 0.03
 
 v_names_states <- c("Stable", "Progressed", "Dead")
 v_names_stages <- c("I", "II", "III", "IV")
@@ -166,7 +163,7 @@ a_prob["Dead", "Stable", , ] <-
 
 a_prob["Dead", "Dead", , ] <- 1
 
-# Use walk fn such that assignments made for each Stage
+# Use purrr::walk fn such that assignments made for each Stage
 
 # S to P
 v_names_stages |> 
@@ -193,9 +190,21 @@ v_names_stages |>
 v_names_stages |> 
   walk(\(x) a_prob["Progressed", "Progressed", x, ] <<- 
          (1 - a_prob["Progressed", "Dead", x, ]))
+```
 
+## Checks
 
-a_prob[, , , 174]
+```{r}
+sum(a_prob >= 0 & a_prob <= 1) - length(a_prob)
+
+tracker <- 0
+
+for (stage in v_names_stages) {
+  for (t in 1:n_cycles+1) {
+    tracker = tracker + rowSums(a_prob[, , stage, t]) - 1
+  }
+}
+tracker # should be zero
 ```
 
 ## Construct Trace
@@ -203,6 +212,7 @@ a_prob[, , , 174]
 ```{r}
 v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
 # v_init_stages <- c(0.37, 0.06, 0.35, 0.22) # rough portions
+# v_init_stages <- rep.int(1, times = 4)
 v_init_states <- c(1, 0, 0) # all patients start in stable state
 
 a_trace <- array(data = NA, 
@@ -225,87 +235,46 @@ for (stage in v_names_stages) {
 ## Gather Results
 
 ```{r}
-
 df <- as.data.frame(aperm(a_trace)) |>
   mutate(Cycle = 0:n_cycles) |> 
-  pivot_longer(cols = 1:12, 
+  pivot_longer(cols = -(Cycle), 
                names_to = c("Stage", "State"),
                names_sep = "\\.",
                values_to = "N") |> 
-  mutate(State = factor(State, 
+  mutate(Year = Cycle * n_cycle_length,
+         State = factor(State, 
                         levels = c("Stable", "Progressed", "Dead"), 
                         ordered = TRUE))
 
 ggplot(data = df) +
-  geom_line(aes(x = Cycle, y = N, colour = Stage)) +
-  facet_wrap(vars(State))
+  geom_line(aes(x = Year, y = N, colour = Stage)) +
+  facet_wrap(vars(State)) #, scales = "free_y")
 ```
 
+## Costs
 
-
-
-
-# Hesim
-
--   Not ideal because Delgado's model had no PSA. Leave here for now, may be useful if I want to make Delgado prob.
-
-## Model Structure
+-   Overarching figures:
 
 ```{r}
-strategies <- data.table(strategy_id = 1, 
-                         strategy_name = "Usual care")
-states <- data.table(state_id = 1:2,
-                     state_name = )
+n_cpi_med <- 0.0077
+n_cpi <- 0.0197
+n_discount_rate <- 0.03
+n_econ_growth <- 0.01
 ```
 
-## Patients
+-   Patients:
 
 ```{r}
-patients <- data.table(patient_id = 1:4,
-                       grp_id = 1:4,
-                       stage = c("I", "II", "III", "IV"),
-                       age = c(57.4, 62.4, 64.9, 68.1))
-
-hesim_data <- hesim_data(strategies, patients, states)
-labels <- get_labels(hesim_data)
-
+n_weight <- 66
+n_height <- 160
 ```
 
-## Outcomes
-
--   Using place-holder of 0.005 for background mortality.
-
--   Need to change to correct cycle length.
+-   Service use:
 
 ```{r}
-median_pfs <- c(18.33, 6.25, 2.00, 1.60)
-median_os <- c(19.50, 7.50, 3.20, 1.90)
-
-tparams_def <- define_tparams({
-  
-  lambda_pfs <- - log(0.5) / median_pfs
-  p_pp <- 1 - exp(-lambda_pfs * time)
-  
-  lambda_os <- - log(0.5) / (median_os - median_pfs)
-  p_d <- 1 - exp(-lambda_os * time)
-  
-  # placeholder:
-  p_mr <- 0.005
-  
-  list(
-    tpmatrix = tpmatrix(
-      C,   p_pp, p_mr,
-      0,   C,    p_d + p_mr,
-      0,   0,    1
-    )
-  )
-}, times = 1:10)
-
-
-
-```
-
-```{r}
-mod_def <- define_model(tparams_def = tparams_def)
+n_brca_ref_rate <- 0.2
+n_brca_ref_visits <- 2
+n_brca_pos_rate <- 0.05
+n_brca_family_refs <- 5
 ```
 
