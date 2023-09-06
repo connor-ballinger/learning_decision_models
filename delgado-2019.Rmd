@@ -7,15 +7,17 @@ output: conr::format_html
 ---
 
 ```{r, warning=FALSE, message=FALSE}
-# knitr::opts_chunk$set()
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 
 # library(here)
 library(tidyverse)
-# library(knitr)
+library(readxl)
+library(janitor)
+library(knitr)
 # library(hesim)
 # library(data.table)
 
-# registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
+registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
 theme_set(theme_bw() + theme(legend.position = "bottom"))
 
@@ -29,7 +31,7 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   10-year horizon, societal perspective.
 
--   “The cycle length used was 3 weeks (21 days), which is the length of a chemotherapy cycle. Patients entered the model after they were diagnosed with EOC in the stable state. A cycle after, they can either remain stable, become worse, and move to a post-progression state, or die. Those who progress remain in a post-progression state until they die.” 
+-   “The cycle length used was 3 weeks (21 days), which is the length of a chemotherapy cycle. Patients entered the model after they were diagnosed with EOC in the stable state... Those who progress remain in a post-progression state until they die.” 
 
 -   Used Heintz 2006 for survival. Heintz only provided 5-year survival data – Delgado extrapolated based on exponential distribution ie time-constant transition probabilities.
 
@@ -49,7 +51,19 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   Add equations.
 
-# Following DARTH Framework (Alarid 2023)
+# DARTH Framework (Alarid 2023)
+
+-   Base R used in the interests of transparency and reducing the chance of running code without understanding it.
+
+-   Objects are named with a prefix to indicate their type:
+
+      -   n: number
+      -   v: vector
+      -   m: matrix
+      -   a: array (generalisation of matrix)
+      -   df: dataframe
+
+-   Arrays are preferred to dataframes due to easier indexing and multiplication.
 
 ## Structure
 
@@ -75,28 +89,28 @@ df_ages <- df_ages |>
 df_ages_long <- df_ages |>
   pivot_longer(cols = -cycle, names_to = "stage", 
                values_to = "age", cols_vary = "slowest")
-
+df_ages_long
 ```
 
 ## Transitions
 
 -   Formulas in Delgado suggest probabilities vary over time, but they have assumed exponential so I don't see how.
 
-### Background Mortality
+-   Annual rates converted to 3-weekly rates by dividing by $\frac{52}{3}$.
 
--   Tricky to separate this from other transition rates...
+### Background Mortality Rate
 
 ```{r}
-life_table <- readxl::read_xlsx("abs_life_tables_2019-2021.xlsx", 
+df_life_table <- readxl::read_xlsx("abs_life_tables_2019-2021.xlsx", 
                                 sheet = "Table_1.9",
                                 skip = 6)
-life_table <- life_table |> 
+df_life_table <- df_life_table |> 
   select(Age, rate...7) |> 
   rename(age = Age, rate_annual_mort = rate...7)
 
 # convert annual rate to 3-weekly rate
 
-life_table <- life_table |> 
+df_life_table <- df_life_table |> 
   mutate(age = as.integer(age),
          rate_bgr_mort = rate_annual_mort / (52/3)) |> 
   filter(age > 55) |> 
@@ -105,10 +119,20 @@ life_table <- life_table |>
 # ignore NA warning, that is due to ABS adding text below data
 
 df_bgr_mort <- df_ages_long |> 
-  left_join(life_table, by = "age")
+  left_join(df_life_table, by = "age")
+df_bgr_mort
 ```
 
--   Need to get other mortality rate (and that requires pfs rate).
+### Transition Rates - Heintz 2006
+
+-   Median 5-year PFS and OS were published by stage. Delgado extrapolated assuming an exponential distribution.
+
+$$S(t_{med}) = \frac{1}{2}$$
+$$e^{-\lambda t_{med}} = \frac{1}{2}$$
+$$t_{med} = \frac{\ln(2)}{\lambda}$$
+Alternately:
+
+$$\lambda = \frac{\ln(2)}{t_{med}}$$
 
 ```{r}
 v_median_pfs <- c(18.33, 6.25, 2.00, 1.60)
@@ -123,7 +147,14 @@ v_3r_os <- v_lambda_os / (52/3) # 3-weekly rate
 df_rates <- tibble(stage = v_names_stages,
                    rate_pfs = v_3r_pfs,
                    rate_os = v_3r_os)
+df_rates
+```
 
+### All Rates to Probabilities
+
+-   Convert rates to probabilities: $P = 1 - e^{-\lambda}$
+
+```{r}
 df_prob <- df_bgr_mort |> 
   left_join(df_rates, by = "stage") |> 
   mutate(across(.cols = starts_with("rate"),
@@ -134,7 +165,7 @@ df_prob <- df_bgr_mort |>
          prob_s_d = prob_bgr_mort,
          prob_p_d = prob_os + prob_bgr_mort) |> 
   select(cycle, stage, prob_s_p, prob_s_d, prob_p_d)
-
+df_prob
 ```
 
 -   Convert to array.
@@ -190,6 +221,8 @@ v_names_stages |>
 v_names_stages |> 
   walk(\(x) a_prob["Progressed", "Progressed", x, ] <<- 
          (1 - a_prob["Progressed", "Dead", x, ]))
+
+a_prob[, ,c("I", "IV") , c(1, n_cycles + 1)]
 ```
 
 ## Checks
@@ -216,10 +249,10 @@ v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
 v_init_states <- c(1, 0, 0) # all patients start in stable state
 
 a_trace <- array(data = NA, 
-               dim = c(3, 4, n_cycles+1), 
-               dimnames = list("state" = v_names_states,
-                               "stage" = v_names_stages,
-                               "cycle" = 0:n_cycles))
+                 dim = c(3, 4, n_cycles+1), 
+                 dimnames = list("state" = v_names_states,
+                                 "stage" = v_names_stages,
+                                 "cycle" = 0:n_cycles))
 
 a_trace[, , "0"] <- v_init_states %o% v_init_stages
 
@@ -230,12 +263,14 @@ for (stage in v_names_stages) {
   }
 }
 
+a_trace[, , c(1, n_cycles + 1)] |> 
+  round()
 ```
 
 ## Gather Results
 
 ```{r}
-df <- as.data.frame(aperm(a_trace)) |>
+df_trace <- as.data.frame(aperm(a_trace)) |>
   mutate(Cycle = 0:n_cycles) |> 
   pivot_longer(cols = -(Cycle), 
                names_to = c("Stage", "State"),
@@ -246,14 +281,14 @@ df <- as.data.frame(aperm(a_trace)) |>
                         levels = c("Stable", "Progressed", "Dead"), 
                         ordered = TRUE))
 
-ggplot(data = df) +
+ggplot(data = df_trace) +
   geom_line(aes(x = Year, y = N, colour = Stage)) +
   facet_wrap(vars(State)) #, scales = "free_y")
 ```
 
 ## Costs
 
--   Overarching figures:
+### Overarching figures:
 
 ```{r}
 n_cpi_med <- 0.0077
@@ -262,19 +297,105 @@ n_discount_rate <- 0.03
 n_econ_growth <- 0.01
 ```
 
--   Patients:
+### Patients:
 
 ```{r}
 n_weight <- 66
 n_height <- 160
 ```
 
--   Service use:
+### Service-use rates:
 
 ```{r}
 n_brca_ref_rate <- 0.2
 n_brca_ref_visits <- 2
 n_brca_pos_rate <- 0.05
 n_brca_family_refs <- 5
+
+v_hospital_6m <- c(1.2, 1.2, 2.1, 2.1)
+v_portion_hospitalised_6m <- c(0.154, 0.154, 0.482, 0.482) # what use is this?
+v_emergencies_6m <- c(1.5, 1.5, 1.7, 1.7)
+v_portion_emergency_6m <- c(0.231, 0.231, 0.222, 0.222)
+
+# note some received no treatment
+
+v_tmt_surgery <- c(0.667, 0.198, 0.113, 0.088)
+v_tmt_neoadj_surgery <- c(0, 0, 0.144, 0.242)
+v_tmt_surgery_adjuv <- c(0.333, 0.802, 0.711, 0.582)
+
+v_laparotomy <- c(1, 1, 1, 1)
+v_omentectomy <- c(0, 0.638, 1, 1)
+v_hysterectomy <- c(1, 1, 1, 1)
+v_bso <- c(0, 1, 1, 1)
+v_lymph <- c(0, 0, 0.75, 1)
+```
+
+### Service costs
+
+```{r}
+df_service_costs <- read_xlsx("delgado_parameters.xlsx", sheet = 1) |> 
+  clean_names()
+df_service_costs <- df_service_costs |> 
+  select(-(references)) |> 
+  rename(service = x1,
+         cost = costs_2016) |> 
+  drop_na(cost)
+df_service_costs
+```
+
+### Drug costs
+
+```{r}
+df_drug_costs <- read_xlsx("delgado_parameters.xlsx", sheet = 2, skip = 1) |> 
+  clean_names()
+df_drug_costs <- df_drug_costs |> 
+  select(-(list_price_lp)) |> 
+  rename(drug = x1, 
+         cost = lp_rdl_vat) |> 
+  drop_na(cost)
+df_drug_costs
+```
+
+### Drug doses
+
+```{r}
+df_drug_doses <- read_xlsx("delgado_parameters.xlsx", sheet = 3, skip = 2) |> 
+  clean_names()
+df_drug_doses <- df_drug_doses |> 
+  rename(drug = x1,
+         time_hours = x6)
+df_drug_doses
+```
+
+### Drug rates
+
+```{r}
+df_drug_use <- read_xlsx("delgado_parameters.xlsx", sheet = 4, skip = 2) |> 
+  clean_names()
+df_drug_use <- df_drug_use |> 
+  rename(drug = x1,
+         line1_stages_i_ii = stages_i_and_ii,
+         line1_stages_iii_iv = stages_iii_and_iv,
+         line2 = x4,
+         line3 = x5,
+         line4 = x6,
+         line5 = x7,
+         line6 = x8,
+         line7 = x9)
+df_drug_use
+```
+
+### Palliative drugs
+
+```{r}
+df_drug_pall <- read_xlsx("delgado_parameters.xlsx", sheet = 5, skip = 2) |> 
+  clean_names()
+df_drug_pall <- df_drug_pall |> 
+  rename(drug = x1,
+         use_pre_terminal = use_of_drugs_2,
+         daily_dose_pre_terminal = daily_dose_mg_m_l_3,
+         use_post_terminal = use_of_drugs_4,
+         daily_dose_post_terminal = daily_dose_mg_m_l_5)
+df_drug_pall
 ```
 
