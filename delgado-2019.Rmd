@@ -227,7 +227,7 @@ v_names_stages |>
   walk(\(x) a_prob["Progressed", "Progressed", x, ] <<- 
          (1 - a_prob["Progressed", "Dead", x, ]))
 
-a_prob[, ,c("I", "IV") , c(1, n_cycles + 1)]
+a_prob[, ,c("I", "IV") , c(1, n_cycles + 1)] |> round(3)
 ```
 
 ## Checks
@@ -304,42 +304,45 @@ n_cpi_med <- 0.0077
 n_cpi <- 0.0197
 n_discount_rate <- 0.03
 n_econ_growth <- 0.01
+
+
+m <- matrix(rep.int(1, 20), nrow = 5) # for checking calcs
 ```
 
 ### Patients:
 
 ```{r}
-n_weight <- 66
-n_height <- 160
+# n_weight <- 66
+# n_height <- 160
 ```
 
 ### Service-use rates:
 
 ```{r}
-n_brca_ref_rate <- 0.2
-n_brca_ref_visits <- 2
-n_brca_pos_rate <- 0.05
-n_brca_family_refs <- 5
-
-v_hospital_6m <- c(1.2, 1.2, 2.1, 2.1)
-v_hospital_3w <- v_hospital_6m * 2 * n_cycle_length
-v_portion_hospitalised_6m <- c(0.154, 0.154, 0.482, 0.482) # what use is this?
-
-v_emergencies_6m <- c(1.5, 1.5, 1.7, 1.7)
-v_emergencies_3w <- v_emergencies_6m * 2 * n_cycle_length
-v_portion_emergency_6m <- c(0.231, 0.231, 0.222, 0.222)
-
-# note some received no treatment
-
-v_tmt_surgery <- c(0.667, 0.198, 0.113, 0.088)
-v_tmt_neoadj_surgery <- c(0, 0, 0.144, 0.242)
-v_tmt_surgery_adjuv <- c(0.333, 0.802, 0.711, 0.582)
-
-v_laparotomy <- c(1, 1, 1, 1)
-v_omentectomy <- c(0, 0.638, 1, 1)
-v_hysterectomy <- c(1, 1, 1, 1)
-v_bso <- c(0, 1, 1, 1)
-v_lymph <- c(0, 0, 0.75, 1)
+# n_brca_ref_rate <- 0.2
+# n_brca_ref_visits <- 2
+# n_brca_pos_rate <- 0.05
+# n_brca_family_refs <- 5
+# 
+# v_hospital_6m <- c(1.2, 1.2, 2.1, 2.1)
+# v_hospital_3w <- v_hospital_6m * 2 * n_cycle_length
+# v_portion_hospitalised_6m <- c(0.154, 0.154, 0.482, 0.482) # what use is this?
+# 
+# v_emergencies_6m <- c(1.5, 1.5, 1.7, 1.7)
+# v_emergencies_3w <- v_emergencies_6m * 2 * n_cycle_length
+# v_portion_emergency_6m <- c(0.231, 0.231, 0.222, 0.222)
+# 
+# # note some received no treatment
+# 
+# v_tmt_surgery <- c(0.667, 0.198, 0.113, 0.088)
+# v_tmt_neoadj_surgery <- c(0, 0, 0.144, 0.242)
+# v_tmt_surgery_adjuv <- c(0.333, 0.802, 0.711, 0.582)
+# 
+# v_laparotomy <- c(1, 1, 1, 1)
+# v_omentectomy <- c(0, 0.638, 1, 1)
+# v_hysterectomy <- c(1, 1, 1, 1)
+# v_bso <- c(0, 1, 1, 1)
+# v_lymph <- c(0, 0, 0.75, 1)
 
 
 
@@ -353,29 +356,30 @@ m_params <- df_key_params |>
   column_to_rownames(var = "param") |> 
   as.matrix()
 m_params <- clean_names(m_params)
+dimnames(m_params)
 m_params
 ```
 
 ### Calculate volume of services
 
+-   Should I name all these vectors using stage names, where relevant? eg v_init_stages.
+
 ```{r}
 # initial surgery
 
 v_init_stages
+names(v_init_stages) <- v_names_stages
 
-(v_any_surgery <- v_tmt_surgery + v_tmt_neoadj_surgery + v_tmt_surgery_adjuv)
+v_names_tmt_strategy <- dimnames(m_params)[[1]][10:13]
+(v_names_surgery <- dimnames(m_params)[[1]][14:18])
 
-v_names_surgery <- c("laparotomy", "omentectomy", "hysterectomy", "bso", "lymph")
-
-map2(v_names_surgery, )
-
-(v_vol_lapar <- v_any_surgery * v_laparotomy)
-
+(v_any_surgery <- (v_tmt_surgery + v_tmt_neoadj_surgery + v_tmt_surgery_adjuv) *
+    v_init_stages)
 
 
-
+(m_vol_surgery <- m_params[v_names_surgery, ] * 
+    matrix(rep(v_any_surgery, 5), ncol = 4, byrow = TRUE))
 ```
-
 
 ### Service costs
 
@@ -386,8 +390,25 @@ df_service_costs <- df_service_costs |>
   select(-(references)) |> 
   rename(service = x1,
          cost = costs_2016) |> 
-  drop_na(cost)
+  drop_na(cost) |> 
+  mutate(service = make_clean_names(service),
+         cost = as.double(cost))
 df_service_costs
+v_cost_services <- deframe(df_service_costs)
+names(v_cost_services)
+
+
+```
+
+### Total Cost of Services
+
+```{r}
+(m_surg_cost <- m_vol_surgery *
+  v_cost_services[c("laparotomy", 
+                    "abdominal_total_hysterectomy", 
+                    "lymphadenectomy",
+                    "omentectomy",
+                    "bilateral_salpingoophorectomy")])
 ```
 
 ### Drug costs
