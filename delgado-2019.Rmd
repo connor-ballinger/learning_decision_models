@@ -1,5 +1,5 @@
 ---
-title: "Ovarian Cancer in Spain: Delgado-Ortega 2019"
+title: "Ovarian Cancer in Spain: Delgado 2019"
 date: "`r conr::format_date()`"
 author: "Connor Ballinger"
 knit: conr::write_and_date
@@ -53,6 +53,8 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 # DARTH Framework (Alarid 2023)
 
+-   Alarid-Escudero, F., Krijkamp, E., Enns, E. A., Yang, A., Hunink, M. G. M., Pechlivanoglou, P., & Jalal, H. (2023). A Tutorial on Time-Dependent Cohort State-Transition Models in R Using a Cost-Effectiveness Analysis Example. Medical Decision Making, 43(1), 21-41. doi:10.1177/0272989x221121747
+
 -   Base R used in the interests of transparency and reducing the chance of running code without understanding it.
 
 -   Objects are named with a prefix to indicate their type:
@@ -63,13 +65,14 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
       -   a: array (generalisation of matrix)
       -   df: dataframe
 
+
 -   Arrays are preferred to dataframes due to easier indexing and multiplication.
 
 ## Structure
 
 ```{r}
 n_cycle_length <- 3 / 52 # 3 weeks
-n_cycles <- round(10 * 52 / 3) # 10 years
+n_cycles <- round(10 / n_cycle_length) # 10 years
 
 v_names_states <- c("Stable", "Progressed", "Dead")
 v_names_stages <- c("I", "II", "III", "IV")
@@ -84,7 +87,7 @@ df_ages <- data.frame(cycle = 0:n_cycles,
                       III = 64.9, 
                       IV = 68.1)
 df_ages <- df_ages |>
-  mutate(across(I:IV, ~ round(cycle / (52/3) + .x)))
+  mutate(across(I:IV, ~ round(cycle * n_cycle_length + .x)))
 
 df_ages_long <- df_ages |>
   pivot_longer(cols = -cycle, names_to = "stage", 
@@ -96,7 +99,7 @@ df_ages_long
 
 -   Formulas in Delgado suggest probabilities vary over time, but they have assumed exponential so I don't see how.
 
--   Annual rates converted to 3-weekly rates by dividing by $\frac{52}{3}$.
+-   Annual rates converted to 3-weekly rates by multiplying by 3/52.
 
 ### Background Mortality Rate
 
@@ -112,8 +115,10 @@ df_life_table <- df_life_table |>
 
 df_life_table <- df_life_table |> 
   mutate(age = as.integer(age),
-         rate_bgr_mort = rate_annual_mort / (52/3)) |> 
-  filter(age > 55) |> 
+         rate_bgr_mort = rate_annual_mort * n_cycle_length) |> 
+  filter(between(age, 
+                 min(df_ages_long$age), 
+                 max(df_ages_long$age))) |> 
   select(age, rate_bgr_mort)
 
 # ignore NA warning, that is due to ABS adding text below data
@@ -130,7 +135,7 @@ df_bgr_mort
 $$S(t_{med}) = \frac{1}{2}$$
 $$e^{-\lambda t_{med}} = \frac{1}{2}$$
 $$t_{med} = \frac{\ln(2)}{\lambda}$$
-Alternately:
+-   Alternately:
 
 $$\lambda = \frac{\ln(2)}{t_{med}}$$
 
@@ -139,10 +144,10 @@ v_median_pfs <- c(18.33, 6.25, 2.00, 1.60)
 v_median_os <- c(19.50, 7.50, 3.20, 1.90)
 
 v_lambda_pfs <- - log(0.5) / v_median_pfs
-v_3r_pfs <- v_lambda_pfs / (52/3) # 3-weekly rate
+v_3r_pfs <- v_lambda_pfs * n_cycle_length # 3-weekly rate
 
 v_lambda_os <- - log(0.5) / (v_median_os - v_median_pfs)
-v_3r_os <- v_lambda_os / (52/3) # 3-weekly rate
+v_3r_os <- v_lambda_os * n_cycle_length # 3-weekly rate
 
 df_rates <- tibble(stage = v_names_stages,
                    rate_pfs = v_3r_pfs,
@@ -284,6 +289,10 @@ df_trace <- as.data.frame(aperm(a_trace)) |>
 ggplot(data = df_trace) +
   geom_line(aes(x = Year, y = N, colour = Stage)) +
   facet_wrap(vars(State)) #, scales = "free_y")
+
+ggplot(data = df_trace) +
+  geom_line(aes(x = Year, y = N, colour = State)) +
+  facet_wrap(vars(Stage), nrow = 1)
 ```
 
 ## Costs
@@ -313,8 +322,11 @@ n_brca_pos_rate <- 0.05
 n_brca_family_refs <- 5
 
 v_hospital_6m <- c(1.2, 1.2, 2.1, 2.1)
+v_hospital_3w <- v_hospital_6m * 2 * n_cycle_length
 v_portion_hospitalised_6m <- c(0.154, 0.154, 0.482, 0.482) # what use is this?
+
 v_emergencies_6m <- c(1.5, 1.5, 1.7, 1.7)
+v_emergencies_3w <- v_emergencies_6m * 2 * n_cycle_length
 v_portion_emergency_6m <- c(0.231, 0.231, 0.222, 0.222)
 
 # note some received no treatment
@@ -328,7 +340,42 @@ v_omentectomy <- c(0, 0.638, 1, 1)
 v_hysterectomy <- c(1, 1, 1, 1)
 v_bso <- c(0, 1, 1, 1)
 v_lymph <- c(0, 0, 0.75, 1)
+
+
+
+df_key_params <- read_xlsx("delgado_parameters.xlsx", sheet = 7) |> 
+  clean_names() |> 
+  rename(param = x1) |> 
+  filter(if_any(stage_i:stage_iv, ~ !is.na(.x)))
+df_key_params <- df_key_params[-1, ] |> 
+  mutate(across(stage_i:stage_iv, as.numeric))
+m_params <- df_key_params |> 
+  column_to_rownames(var = "param") |> 
+  as.matrix()
+m_params <- clean_names(m_params)
+m_params
 ```
+
+### Calculate volume of services
+
+```{r}
+# initial surgery
+
+v_init_stages
+
+(v_any_surgery <- v_tmt_surgery + v_tmt_neoadj_surgery + v_tmt_surgery_adjuv)
+
+v_names_surgery <- c("laparotomy", "omentectomy", "hysterectomy", "bso", "lymph")
+
+map2(v_names_surgery, )
+
+(v_vol_lapar <- v_any_surgery * v_laparotomy)
+
+
+
+
+```
+
 
 ### Service costs
 
