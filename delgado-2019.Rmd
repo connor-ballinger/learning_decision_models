@@ -14,6 +14,7 @@ library(tidyverse)
 library(readxl)
 library(janitor)
 library(knitr)
+library(lpSolve)
 # library(hesim)
 # library(data.table)
 
@@ -309,21 +310,12 @@ n_econ_growth <- 0.01
 m <- matrix(rep.int(1, 20), nrow = 5) # for checking calcs
 ```
 
-### Patients:
-
-```{r}
-# n_weight <- 66
-# n_height <- 160
-```
-
 ### Service-use rates:
 
+-   Not sure what use it is to have portion of patients hospitalised/seen ED in a period (we only need the mean rate, right?).
+
 ```{r}
-# n_brca_ref_rate <- 0.2
-# n_brca_ref_visits <- 2
-# n_brca_pos_rate <- 0.05
-# n_brca_family_refs <- 5
-# 
+ 
 # v_hospital_6m <- c(1.2, 1.2, 2.1, 2.1)
 # v_hospital_3w <- v_hospital_6m * 2 * n_cycle_length
 # v_portion_hospitalised_6m <- c(0.154, 0.154, 0.482, 0.482) # what use is this?
@@ -367,18 +359,19 @@ m_params
 ```{r}
 # initial surgery
 
-v_init_stages
-names(v_init_stages) <- v_names_stages
+(names(v_init_stages) <- v_names_stages)
 
-v_names_tmt_strategy <- dimnames(m_params)[[1]][10:13]
+(v_names_tmt_strategy <- dimnames(m_params)[[1]][10:13])
 (v_names_surgery <- dimnames(m_params)[[1]][14:18])
 
-(v_any_surgery <- (v_tmt_surgery + v_tmt_neoadj_surgery + v_tmt_surgery_adjuv) *
-    v_init_stages)
-
+(v_vol_any_surgery <- colSums(m_params[grep("surgery", dimnames(m_params)[[1]]), ]) * v_init_stages)
 
 (m_vol_surgery <- m_params[v_names_surgery, ] * 
-    matrix(rep(v_any_surgery, 5), ncol = 4, byrow = TRUE))
+    matrix(rep(v_vol_any_surgery, 5), ncol = 4, byrow = TRUE))
+
+# hospital episodes
+
+(m_rate_episode <- m_params[c("number_of_hospitalizations", "number_of_emergencies"), ] * n_cycle_length)
 ```
 
 ### Service costs
@@ -396,8 +389,21 @@ df_service_costs <- df_service_costs |>
 df_service_costs
 v_cost_services <- deframe(df_service_costs)
 names(v_cost_services)
+```
 
+-   BRCA testing seems to be quite removed from other calculations.
 
+```{r}
+n_brca_ref_rate <- 0.2
+n_brca_ref_visits <- 2
+n_brca_pos_rate <- 0.05
+n_brca_family_refs <- 5
+
+n_vol_brca_test <- sum(v_init_stages) * n_brca_ref_rate
+n_vol_brca_pos <- n_vol_brca_test * n_brca_pos_rate
+n_vol_brca_indirect <- n_vol_brca_pos * 5 # do the 5 relatives have BRCA test?
+
+# difficult to interpret what they did
 ```
 
 ### Total Cost of Services
@@ -409,6 +415,10 @@ names(v_cost_services)
                     "lymphadenectomy",
                     "omentectomy",
                     "bilateral_salpingoophorectomy")])
+
+(m_episode_cost <- m_rate_episode * 
+  v_cost_services[c("ovarian_cancer_hospitalization", 
+                    "emergency_department_attendance")])
 ```
 
 ### Drug costs
@@ -421,7 +431,18 @@ df_drug_costs <- df_drug_costs |>
   rename(drug = x1, 
          cost = lp_rdl_vat) |> 
   drop_na(cost)
+
+df_drug_costs <- df_drug_costs |> 
+  separate_wider_delim(cols = drug, delim = " ", names = c("drug", "unit"), 
+                       too_many = "merge") |> 
+  mutate(quantity_ml = as.double(str_extract(unit, "([0-9]*\\.?[0-9]+) ML\\)", group = 1)),
+         drug = str_to_title(drug)) |> 
+  arrange(drug, cost)
+
 df_drug_costs
+
+(v_drug_costs <- deframe(df_drug_costs[, c("drug", "cost")]))
+
 ```
 
 ### Drug doses
@@ -431,8 +452,14 @@ df_drug_doses <- read_xlsx("delgado_parameters.xlsx", sheet = 3, skip = 2) |>
   clean_names()
 df_drug_doses <- df_drug_doses |> 
   rename(drug = x1,
-         time_hours = x6)
+         time_hours = x6) |> 
+  mutate(drug = gsub("[[:punct:]]", "", drug))
 df_drug_doses
+
+m_drug_doses <- df_drug_doses |> 
+  column_to_rownames(var = "drug") |>
+  as.matrix()
+m_drug_doses
 ```
 
 ### Drug rates
@@ -449,9 +476,64 @@ df_drug_use <- df_drug_use |>
          line4 = x6,
          line5 = x7,
          line6 = x8,
-         line7 = x9)
-df_drug_use
+         line7 = x9) |> 
+  mutate(across(.cols = -c(1), as.double))
+
+m_drug_use <- df_drug_use |>
+  column_to_rownames(var = "drug") |> 
+  as.matrix()
+m_drug_use
 ```
+
+### Drug Calculations
+
+-   Initial, one-off treatment which most receive, and subsequent treatment according to the trace.
+
+-   Dependent on stage only for first line. Second line only administered when in progressed state.
+
+-   How do later lines work?
+
+-   How does costing work? 
+
+    -   Calculate optimal use of vials.
+    -   Get cost of one administration.
+    -   Markov cycle length is same as treatment cycle, presumably with the intention of allowing transitions between cycles, meaning there is no assumption that all patients complete all treatment lines which they start.
+
+```{r}
+fn_calc_drugs <- function(drug_name, stage = "stage_i") {
+  
+  df_drug = df_drug_costs[df_drug_costs$drug == drug_name, ]
+  quantities = df_drug$quantity_ml
+  cost = df_drug$cost
+  dose = m_drug_doses[drug_name, stage]
+  
+  opt = lp(direction = "min",
+           objective.in = cost,
+           const.mat = t(quantities),
+           const.dir = c(">="),
+           const.rhs = dose,
+           all.int = TRUE)
+  
+  tibble(drug = df_drug$drug,
+         info = df_drug$unit,
+         doses = as.vector(opt$constraints)[1:4],
+         costs = opt$objective,
+         dose_needed = dose,
+         stage = stage,
+         solution = opt$solution,
+         total_cost = opt$objval)
+}
+
+fn_calc_drugs("Paclitaxel")
+```
+
+```{r}
+df_drug_costs |> 
+  mutate(n = n(), .by = drug) |> 
+  filter(n > 1)
+```
+
+
 
 ### Palliative drugs
 
