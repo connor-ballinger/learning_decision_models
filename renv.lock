@@ -395,7 +395,7 @@
       "RemoteUsername": "connor-ballinger",
       "RemoteRepo": "conr",
       "RemoteRef": "main",
-      "RemoteSha": "2b1f6c5fa23ae879d44a825c94ea6098db4ed7d2",
+      "RemoteSha": "a48b5c81c4a05de280a528458a4b1582b41bd67d",
       "Requirements": [
         "DT",
         "dplyr",
@@ -404,11 +404,12 @@
         "here",
         "knitr",
         "modelsummary",
+        "purrr",
         "rmarkdown",
         "scales",
         "xfun"
       ],
-      "Hash": "621e0ea4be3e3cbba8d34112ac4d6e19"
+      "Hash": "29c5c3c6c9d80a164dc5c60bddade14e"
     },
     "cpp11": {
       "Package": "cpp11",
@@ -1252,6 +1253,13 @@
         "rlang"
       ],
       "Hash": "001cecbeac1cff9301bdc3775ee46a86"
+    },
+    "lpSolve": {
+      "Package": "lpSolve",
+      "Version": "5.6.18",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Hash": "12c7a918599d5700e4265dd8a21f684f"
     },
     "lubridate": {
       "Package": "lubridate",

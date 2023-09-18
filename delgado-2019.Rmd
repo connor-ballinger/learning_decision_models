@@ -7,7 +7,7 @@ output: conr::format_html
 ---
 
 ```{r, warning=FALSE, message=FALSE}
-knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, comment = "")
 
 # library(here)
 library(tidyverse)
@@ -15,10 +15,6 @@ library(readxl)
 library(janitor)
 library(knitr)
 library(lpSolve)
-# library(hesim)
-# library(data.table)
-
-registerS3method("knit_print", "data.frame", conr::knit_print.data.frame)
 
 theme_set(theme_bw() + theme(legend.position = "bottom"))
 
@@ -65,9 +61,10 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
       -   m: matrix
       -   a: array (generalisation of matrix)
       -   df: dataframe
-
-
+<br><br>
 -   Arrays are preferred to dataframes due to easier indexing and multiplication.
+
+# Replication of Delgado
 
 ## Structure
 
@@ -136,7 +133,8 @@ df_bgr_mort
 $$S(t_{med}) = \frac{1}{2}$$
 $$e^{-\lambda t_{med}} = \frac{1}{2}$$
 $$t_{med} = \frac{\ln(2)}{\lambda}$$
--   Alternately:
+
+    -   Alternately:
 
 $$\lambda = \frac{\ln(2)}{t_{med}}$$
 
@@ -296,9 +294,9 @@ ggplot(data = df_trace) +
   facet_wrap(vars(Stage), nrow = 1)
 ```
 
-## Costs
+# Costs
 
-### Overarching figures:
+## Overarching Cost Figures
 
 ```{r}
 n_cpi_med <- 0.0077
@@ -310,71 +308,53 @@ n_econ_growth <- 0.01
 m <- matrix(rep.int(1, 20), nrow = 5) # for checking calcs
 ```
 
-### Service-use rates:
+## Services
 
 -   Not sure what use it is to have portion of patients hospitalised/seen ED in a period (we only need the mean rate, right?).
 
 ```{r}
- 
-# v_hospital_6m <- c(1.2, 1.2, 2.1, 2.1)
-# v_hospital_3w <- v_hospital_6m * 2 * n_cycle_length
-# v_portion_hospitalised_6m <- c(0.154, 0.154, 0.482, 0.482) # what use is this?
-# 
-# v_emergencies_6m <- c(1.5, 1.5, 1.7, 1.7)
-# v_emergencies_3w <- v_emergencies_6m * 2 * n_cycle_length
-# v_portion_emergency_6m <- c(0.231, 0.231, 0.222, 0.222)
-# 
-# # note some received no treatment
-# 
-# v_tmt_surgery <- c(0.667, 0.198, 0.113, 0.088)
-# v_tmt_neoadj_surgery <- c(0, 0, 0.144, 0.242)
-# v_tmt_surgery_adjuv <- c(0.333, 0.802, 0.711, 0.582)
-# 
-# v_laparotomy <- c(1, 1, 1, 1)
-# v_omentectomy <- c(0, 0.638, 1, 1)
-# v_hysterectomy <- c(1, 1, 1, 1)
-# v_bso <- c(0, 1, 1, 1)
-# v_lymph <- c(0, 0, 0.75, 1)
-
-
-
 df_key_params <- read_xlsx("delgado_parameters.xlsx", sheet = 7) |> 
   clean_names() |> 
   rename(param = x1) |> 
   filter(if_any(stage_i:stage_iv, ~ !is.na(.x)))
 df_key_params <- df_key_params[-1, ] |> 
   mutate(across(stage_i:stage_iv, as.numeric))
+df_key_params
+
 m_params <- df_key_params |> 
   column_to_rownames(var = "param") |> 
   as.matrix()
 m_params <- clean_names(m_params)
-dimnames(m_params)
-m_params
+
 ```
 
-### Calculate volume of services
+### Calculate Volume of Services
 
 -   Should I name all these vectors using stage names, where relevant? eg v_init_stages.
 
-```{r}
+```{r, results='hold'}
 # initial surgery
 
-(names(v_init_stages) <- v_names_stages)
+names(v_init_stages) <- v_names_stages
 
-(v_names_tmt_strategy <- dimnames(m_params)[[1]][10:13])
-(v_names_surgery <- dimnames(m_params)[[1]][14:18])
+v_names_tmt_strategy <- dimnames(m_params)[[1]][10:13]
+v_names_surgery <- dimnames(m_params)[[1]][14:18]
 
-(v_vol_any_surgery <- colSums(m_params[grep("surgery", dimnames(m_params)[[1]]), ]) * v_init_stages)
+v_vol_any_surgery <- colSums(m_params[grep("surgery", dimnames(m_params)[[1]]), ]) * v_init_stages
 
-(m_vol_surgery <- m_params[v_names_surgery, ] * 
-    matrix(rep(v_vol_any_surgery, 5), ncol = 4, byrow = TRUE))
+cat("Initial Surgery Volumes\n")
+m_vol_surgery <- m_params[v_names_surgery, ] * 
+    matrix(rep(v_vol_any_surgery, 5), ncol = 4, byrow = TRUE)
+conr::round_sensibly(m_vol_surgery)
 
 # hospital episodes
 
-(m_rate_episode <- m_params[c("number_of_hospitalizations", "number_of_emergencies"), ] * n_cycle_length)
+cat("\n 3-Weekly Rate of Presentations\n")
+m_rate_episode <- m_params[c("number_of_hospitalizations", "number_of_emergencies"), ] * n_cycle_length
+conr::round_sensibly(m_rate_episode, 2)
 ```
 
-### Service costs
+### Service Unit Costs
 
 ```{r}
 df_service_costs <- read_xlsx("delgado_parameters.xlsx", sheet = 1) |> 
@@ -387,8 +367,8 @@ df_service_costs <- df_service_costs |>
   mutate(service = make_clean_names(service),
          cost = as.double(cost))
 df_service_costs
+
 v_cost_services <- deframe(df_service_costs)
-names(v_cost_services)
 ```
 
 -   BRCA testing seems to be quite removed from other calculations.
@@ -408,20 +388,27 @@ n_vol_brca_indirect <- n_vol_brca_pos * 5 # do the 5 relatives have BRCA test?
 
 ### Total Cost of Services
 
-```{r}
-(m_surg_cost <- m_vol_surgery *
+```{r, results='hold'}
+cat("Initial Surgery Costs \n")
+m_surg_cost <- m_vol_surgery *
   v_cost_services[c("laparotomy", 
                     "abdominal_total_hysterectomy", 
                     "lymphadenectomy",
                     "omentectomy",
-                    "bilateral_salpingoophorectomy")])
+                    "bilateral_salpingoophorectomy")]
+conr::round_sensibly(m_surg_cost)
 
-(m_episode_cost <- m_rate_episode * 
+cat("\n 3-Weekly Presentations Cost \n")
+m_episode_cost <- m_rate_episode * 
   v_cost_services[c("ovarian_cancer_hospitalization", 
-                    "emergency_department_attendance")])
+                    "emergency_department_attendance")]
+dimnames(m_episode_cost)[[1]] <- gsub("[a-z]*\\_", "", dimnames(m_episode_cost)[[1]])
+conr::round_sensibly(m_episode_cost)
 ```
 
-### Drug costs
+## Drugs
+
+### Drug Unit Costs
 
 ```{r}
 df_drug_costs <- read_xlsx("delgado_parameters.xlsx", sheet = 2, skip = 1) |> 
@@ -440,12 +427,9 @@ df_drug_costs <- df_drug_costs |>
   arrange(drug, cost)
 
 df_drug_costs
-
-(v_drug_costs <- deframe(df_drug_costs[, c("drug", "cost")]))
-
 ```
 
-### Drug doses
+### Drug Dosing
 
 ```{r}
 df_drug_doses <- read_xlsx("delgado_parameters.xlsx", sheet = 3, skip = 2) |> 
@@ -459,13 +443,13 @@ df_drug_doses
 m_drug_doses <- df_drug_doses |> 
   column_to_rownames(var = "drug") |>
   as.matrix()
-m_drug_doses
+
 ```
 
-### Drug rates
+### Drug Market Share
 
 ```{r}
-df_drug_use <- read_xlsx("delgado_parameters.xlsx", sheet = 4, skip = 2) |> 
+df_drug_use <- read_xlsx("delgado_parameters.xlsx", sheet = 4, skip = 2, na = "-") |> 
   clean_names()
 df_drug_use <- df_drug_use |> 
   rename(drug = x1,
@@ -477,12 +461,26 @@ df_drug_use <- df_drug_use |>
          line5 = x7,
          line6 = x8,
          line7 = x9) |> 
-  mutate(across(.cols = -c(1), as.double))
+  mutate(across(.cols = -c(1), as.double)) |> 
+  mutate(drug = gsub("[[:punct:]]", "", drug))
+df_drug_use
 
 m_drug_use <- df_drug_use |>
   column_to_rownames(var = "drug") |> 
   as.matrix()
-m_drug_use
+
+```
+
+### Drugs Missing Data
+
+-   Missing dosing for some drugs, missing costs for others.
+
+```{r}
+df_key_drugs <- inner_join(df_drug_costs, df_drug_doses, by = "drug")
+(df_drugs_missing_dose <- anti_join(df_drug_costs, df_key_drugs, by = "drug") |> 
+    mutate(dose = NA))
+(df_drugs_missing_cost <- anti_join(df_drug_doses, df_key_drugs, by = "drug") |> 
+    mutate(unit_cost = NA))
 ```
 
 ### Drug Calculations
@@ -499,10 +497,14 @@ m_drug_use
     -   Get cost of one administration.
     -   Markov cycle length is same as treatment cycle, presumably with the intention of allowing transitions between cycles, meaning there is no assumption that all patients complete all treatment lines which they start.
 
+<br>
+
+-   Optimise selection of vials w.r.t. cost, under a single constraint of minimum dose required. Calculate for each drug, each stage, and calculate cost.
+
 ```{r}
 fn_calc_drugs <- function(drug_name, stage = "stage_i") {
   
-  df_drug = df_drug_costs[df_drug_costs$drug == drug_name, ]
+  df_drug = filter(df_drug_costs, drug == drug_name)
   quantities = df_drug$quantity_ml
   cost = df_drug$cost
   dose = m_drug_doses[drug_name, stage]
@@ -516,23 +518,67 @@ fn_calc_drugs <- function(drug_name, stage = "stage_i") {
   
   tibble(drug = df_drug$drug,
          info = df_drug$unit,
-         doses = as.vector(opt$constraints)[1:4],
-         costs = opt$objective,
+         ml = as.vector(opt$constraints)[-c(length(opt$constraints), 
+                                               length(opt$constraints) - 1)],
+         unit_cost = opt$objective,
          dose_needed = dose,
          stage = stage,
-         solution = opt$solution,
-         total_cost = opt$objval)
+         vials_n = opt$solution,
+         total_cost = opt$objval) |> 
+    filter(vials_n != 0)
 }
 
-fn_calc_drugs("Paclitaxel")
+
+fn_calc_all_drugs <- function() {
+  
+  stage_names = tolower(paste0("stage_", v_names_stages))
+  drug_names = unique(df_key_drugs$drug)
+  
+  df = tibble(drug = NA,
+              info = NA,
+              ml = NA,
+              unit_cost = NA,
+              dose_needed = NA,
+              stage = NA,
+              vials_n = NA,
+              total_cost = NA)
+  
+  for (drug in drug_names) {
+      for (stage in stage_names) {
+        drug_result = fn_calc_drugs(drug, stage)
+        df = df |> add_row(drug_result)
+      }
+  }
+  df[-1, ] |>  # drop the shitty first row
+    mutate(cost_for_vials = unit_cost * vials_n, .before = total_cost)
+}
+
+my_drugs <- fn_calc_all_drugs()
+my_drugs
+m_costed_drugs <- my_drugs |> 
+  distinct(drug, stage, .keep_all = TRUE) |> 
+  select(drug, stage, total_cost) |> 
+  pivot_wider(names_from = stage, values_from = total_cost) |> 
+  column_to_rownames("drug") |> 
+  as.matrix()
+
+m_costed_drugs
+
 ```
 
 ```{r}
-df_drug_costs |> 
-  mutate(n = n(), .by = drug) |> 
-  filter(n > 1)
+m_line1_use <- df_drug_use |> 
+  select(1:3) |> 
+  rename(stage_i = line1_stages_i_ii,
+         stage_iv = line1_stages_iii_iv) |> 
+  mutate(stage_ii = stage_i,
+         stage_iii = stage_iv,
+         .before = stage_iv) |> 
+  arrange(drug) |> 
+  column_to_rownames("drug") |> 
+  as.matrix()
+m_line1_use
 ```
-
 
 
 ### Palliative drugs
