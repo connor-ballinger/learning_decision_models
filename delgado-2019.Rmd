@@ -30,13 +30,17 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   “The cycle length used was 3 weeks (21 days), which is the length of a chemotherapy cycle. Patients entered the model after they were diagnosed with EOC in the stable state... Those who progress remain in a post-progression state until they die.” 
 
--   Used Heintz 2006 for survival. Heintz only provided 5-year survival data – Delgado extrapolated based on exponential distribution ie time-constant transition probabilities.
+-   Used Heintz 2006 for survival. Heintz only provided 5-year survival data – Delgado extrapolated based on exponential distribution i.e. time-constant transition probabilities.
 
 -   Recall there may be no treatment effects applied - may just use Olaparib survival curves directly in an appropriate sub-population.
 
 -   Note age-specific probabilities of death (incorporating OC mortality rate and background mortality rate).
 
-    -   Add 2 rates and then calculate probability, or calculate probabilities and add? Delgado uses the latter. Always the latter.
+    -   Always calculate probabilities and add rather than add rates and calculate probability.
+
+# Assumptions
+
+-   Neoadjuvant CT and all surgical treatment is administered in the first cycle, essentially as start-up costs.
 
 # To do
 
@@ -46,9 +50,12 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 # Issues
 
+-   How to add calculations for 2nd to 7th lines? No tunnel states, so no way of knowing which line is applicable. Same issue exists within lines as patients could change states between cycles.
+
 -   Appears you can't use arithmetic and pipe the result. Perform arithmetic and assign to object, then perform other functions in pipe chain.
 
-    -   e.g. 1.5 + 1 |> round() = 2.5
+    -   e.g. 1.5 + 1 |> round() = 2.5 but 1 + 1.5 |> round() = 3, since 1.5 gets rounded to 2.
+    -   See [here](https://stackoverflow.com/questions/72352994/different-outputs-with-pipe-after-arithmetic-operator-vs-calling-it-directly):  the pipe precedes arithmetic functions in order of operations.
 
 # DARTH Framework (Alarid 2023)
 
@@ -139,7 +146,7 @@ $$S(t_{med}) = \frac{1}{2}$$
 $$e^{-\lambda t_{med}} = \frac{1}{2}$$
 $$t_{med} = \frac{\ln(2)}{\lambda}$$
 
-    -   Alternately:
+      -   Alternately:
 
 $$\lambda = \frac{\ln(2)}{t_{med}}$$
 
@@ -311,8 +318,6 @@ ggplot(data = df_trace) +
     -   Drug dosing (fairly straightforward, could be reduced) df_drug_doses
     -   Drugs palliative (dose, market share, pre/post terminal) df_drug_pall
     -   Drugs market share (7 lines, first is split into 2) df_drug_use
-    -   my_drugs: derived parameters
-    
 
 ## Overarching Cost Figures
 
@@ -337,7 +342,6 @@ df_params_general <- read_xlsx("delgado_parameters.xlsx", sheet = 7) |>
   filter(if_any(stage_i:stage_iv, ~ !is.na(.x)))
 df_params_general <- df_params_general[-1, ] |> 
   mutate(across(stage_i:stage_iv, as.numeric))
-df_params_general
 
 df_params_general$param <- c("median_pfs", "median_os", "mean_age", 
                              "mean_weight", "mean_height", "hospitalisations_n",
@@ -349,7 +353,7 @@ df_params_general$param <- c("median_pfs", "median_os", "mean_age",
                              "surgery_abdominal_total_hysterectomy",
                              "surgery_bilateral_salpingo_oophorectomy", 
                              "surgery_lymphadenectomy")
-
+df_params_general
 
 m_params <- df_params_general |> 
   column_to_rownames(var = "param") |> 
@@ -496,12 +500,13 @@ df_drug_costs <- df_drug_costs |>
   add_case(dox) |> 
   arrange(drug, cost)
 
+df_drug_costs <- df_drug_costs |> 
+  mutate(quant = if_else(!is.na(quantity_ml), quantity_ml, quantity_mg))
+
 df_drug_costs
 ```
 
 ### Drug Dosing
-
--   **Check Bevacizumab**
 
 ```{r}
 df_drug_doses <- read_xlsx("delgado_parameters.xlsx", sheet = 3, skip = 2) |> 
@@ -547,23 +552,7 @@ m_drug_use <- df_drug_use |>
 
 ```
 
-### Drugs Missing Data
-
--   Missing dosing for some drugs, missing costs for others.
-
-```{r}
-# df_drug_chemo <- inner_join(df_drug_costs, df_drug_doses, by = "drug") |> 
-#   select(drug, )
-# df_drug_chemo
-# (df_drugs_missing_dose <- anti_join(df_drug_costs, df_key_drugs, by = "drug") |> 
-#     mutate(dose = NA))
-# (df_drugs_missing_cost <- anti_join(df_drug_doses, df_key_drugs, by = "drug") |> 
-#     mutate(unit_cost = NA))
-# df_drugs_missing_cost
-# df_key_drugs
-```
-
-### Drug Calculations
+### CT Drug Calculations
 
 -   Initial, one-off treatment which most receive, and subsequent treatment according to the trace.
 
@@ -576,8 +565,7 @@ m_drug_use <- df_drug_use |>
     -   Calculate optimal use of vials.
     -   Get cost of one administration.
     -   Markov cycle length is same as treatment cycle, presumably with the intention of allowing transitions between cycles, meaning there is no assumption that all patients complete all treatment lines which they start.
-
-<br>
+<br><br>
 
 -   Optimise selection of vials w.r.t. cost, under a single constraint of minimum dose required. Calculate for each drug, each stage, and calculate cost.
 
@@ -585,7 +573,7 @@ m_drug_use <- df_drug_use |>
 fn_calc_drugs <- function(drug_name, stage = "stage_i") {
   
   df_drug = filter(df_drug_costs, drug == drug_name)
-  quantities = df_drug$quantity_ml
+  quantities = df_drug$quant
   cost = df_drug$cost
   dose = m_drug_doses[drug_name, stage]
   
@@ -633,23 +621,20 @@ fn_calc_all_drugs <- function() {
     mutate(cost_for_vials = unit_cost * vials_n, .before = total_cost)
 }
 
-my_drugs <- fn_calc_all_drugs()
-my_drugs
+df_drugs_derived <- fn_calc_all_drugs()
+df_drugs_derived
 
-m_costed_drugs <- my_drugs |> 
+m_costed_drugs <- df_drugs_derived |> 
   distinct(drug, stage, .keep_all = TRUE) |> 
   select(drug, stage, total_cost) |> 
   pivot_wider(names_from = stage, values_from = total_cost) |> 
   column_to_rownames("drug") |> 
   as.matrix()
 
-m_costed_drugs
-unique(my_drugs$drug)
+m_costed_drugs |> conr::round_sensibly()
 ```
 
-# Not sure how costs work
-
--   Do we assume all patients receive treatment before the model begins? No mortality or anything? i.e. Initial start-up costs like surgery. 
+### CT Questions
 
 -   Maybe model starts immediately after surgery, so pre-surgical chemo is guaranteed, as is first cycle of post-surgical chemo. Subsequent cycles are not guaranteed.
 
@@ -658,10 +643,10 @@ unique(my_drugs$drug)
     -   Neoadjuvant receive 3 cycles of paclitaxel with carboplatin prior to surgery and 3 cycles post-surgery.
     -   Adjuvant administered post-surgery in Stable state.
     -   Post-progression chemo administered post-progression for Stages I and II.
-    -   Advanced treatment for Stage III post-progression and both states for Stage IV. But they haven't define advanced chemotherapy...
-
+    -   Advanced treatment for Stage III post-progression and both states for Stage IV. **But they haven't defined advanced chemotherapy...**
 <br><br>
--   Are the calculated costs only for a single cycle (and treatment requires 6)?
+
+-   Are the calculated costs only for a single cycle (and treatment requires 6)? How do you keep track of what cycle they should be up to without tunnel states? How do you track lines of treatment?
 
 ### Neoadjuvant Cost
 
@@ -672,13 +657,13 @@ unique(my_drugs$drug)
 ```{r}
 # 3 cycles of palitaxel and carboplatin
 
-m_total_cost_neo <- m_costed_drugs[c("Carboplatin", "Paclitaxel"), 3:4] %*% 
-  # diag(a_trace["Stable", c("III", "IV") , "0"]) %*% ######################### per person cost, trace later
-  diag(m_params[grep("neoadjuvant", dimnames(m_params)[[1]]), 3:4]) * 
+m_cost_neo_pp_3 <- m_costed_drugs[c("Carboplatin", "Paclitaxel"), 3:4] %*% 
+  diag(m_params[grep("neoadjuvant", rownames(m_params)), 3:4]) %*%
+  diag(m_drug_use[c("Carboplatin", "Paclitaxel"), "line1_stages_iii_iv"]) *
   3
 
-dimnames(m_total_cost_neo)[[2]] <- c("III", "IV")
-m_total_cost_neo
+colnames(m_cost_neo_pp_3) <- c("III", "IV")
+m_cost_neo_pp_3
 
 # Assume they get another 3 regardless of state? Or only those in Stable?
 
@@ -692,8 +677,6 @@ m_total_cost_neo
 
 ```{r}
 m_params[v_names_tmt_strategy, ]
-
-
 
 m_line1_use <- df_drug_use |> 
   select(1:3) |> 
@@ -714,13 +697,15 @@ m_costed_drugs
 m_cost_adjuvant <- 
   m_line1_use[rownames(m_costed_drugs), ] * 
   m_costed_drugs %*% 
-  diag(m_params[grep("_adjuvant", dimnames(m_params)[[1]]), ])
+  diag(m_params[grep("_adjuvant", rownames(m_params)), ])
 
 m_cost_adjuvant  
  
 ```
 
 ### Subsequent Lines of Treatment
+
+-   How does this work? 
 
 ```{r}
 df_drug_use |> 
@@ -731,7 +716,7 @@ df_drug_use |>
 
 # Initialise Cost Matrix
 
--   Bring the per person cost here, multiply trace for total cost at each cycle, for each stage.
+-   Bring the per person cost here, multiply trace for total cost at each cycle, for each stage. Multiply by portion of patients in treatment strategy and portion of patients who receive drug.
 
 -   Often have to add costs, not reassign the existing matrix value...
 
@@ -748,9 +733,9 @@ a_costs <- array(data = 0,
 
 ## three cycles before surgery
 
-a_costs["0", colnames(m_total_cost_neo), rownames(m_total_cost_neo)] <- 
-  a_costs["0", colnames(m_total_cost_neo), rownames(m_total_cost_neo)] +
-  m_total_cost_neo %*% diag(a_trace["Stable", colnames(m_total_cost_neo) , "0"])
+a_costs["0", colnames(m_cost_neo_pp_3), rownames(m_cost_neo_pp_3)] <- 
+  a_costs["0", colnames(m_cost_neo_pp_3), rownames(m_cost_neo_pp_3)] +
+  m_cost_neo_pp_3 %*% diag(a_trace["Stable", colnames(m_cost_neo_pp_3) , "0"])
 
 ## what about three cycles post-surgery?
 
@@ -768,23 +753,7 @@ a_costs["1", , ] <-
   a_costs["1", , ] +
   t(m_cost_adjuvant %*% diag(a_trace["Stable", , "1"]))
 
-a_costs["0", , ] |> format(big.mark = ",", scientific = 999)
-
-```
-
-
-
-
-```{r}
-
-
-
-
-m_drug_total_cost <- m_line1_use[rownames(m_costed_drugs),] * m_costed_drugs * 6 
-
-m_drug_total_cost <- m_drug_total_cost %*% diag(v_init_stages) # note use of diag to create matrix
-
-
+a_costs["0", , ] |> conr::round_sensibly() |> format(big.mark = ",", scientific = 999)
 
 ```
 
@@ -800,5 +769,11 @@ df_drug_pall <- df_drug_pall |>
          use_post_terminal = use_of_drugs_4,
          daily_dose_post_terminal = daily_dose_mg_m_l_5)
 df_drug_pall
+```
+
+```{r}
+anti_join(df_drug_costs, df_drug_doses, by = "drug")
+
+
 ```
 
