@@ -9,7 +9,6 @@ output: conr::format_html
 ```{r, warning=FALSE, message=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE, comment = "")
 
-# library(here)
 library(tidyverse)
 library(readxl)
 library(janitor)
@@ -48,9 +47,13 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   Construct a critique, including any Aus contextual factors.
 
-# Issues
+# Questions
 
 -   How to add calculations for 2nd to 7th lines? No tunnel states, so no way of knowing which line is applicable. Same issue exists within lines as patients could change states between cycles.
+
+      -   See Cheng 2021: they assume everyone in Progressed state is receiving treatment.
+
+# Sidenote
 
 -   Appears you can't use arithmetic and pipe the result. Perform arithmetic and assign to object, then perform other functions in pipe chain.
 
@@ -359,7 +362,7 @@ m_params <- df_params_general |>
   column_to_rownames(var = "param") |> 
   as.matrix()
 m_params <- clean_names(m_params)
-m_params
+
 ```
 
 ### Calculate Volume of Services
@@ -409,7 +412,7 @@ df_service_costs
 v_cost_services <- deframe(df_service_costs)
 ```
 
--   BRCA testing seems to be quite removed from other calculations.
+-   Can't understand what they did with BRCA testing.
 
 ```{r}
 n_brca_ref_rate <- 0.2
@@ -429,7 +432,7 @@ n_vol_brca_indirect <- n_vol_brca_pos * 5 # do the 5 relatives have BRCA test?
 -   Initial surgery costs:
 
 ```{r}
-
+# is this shit code or fine?
 names(v_cost_services)[
   v_names_surgery |> 
   gsub("surgery", "", x = _) |> 
@@ -442,8 +445,8 @@ m_surg_cost <- m_vol_surgery *
   v_cost_services[v_names_surgery]
 
 
-m_surg_cost |> colSums() |> scales::label_dollar()(x = _)
-m_surg_cost |> rowSums() |> scales::label_dollar()(x = _)
+m_surg_cost |> colSums() |> scales::label_dollar()(x = _) |> enframe()
+m_surg_cost |> rowSums() |> scales::label_dollar()(x = _) |> enframe()
 ```
 
 -   3-weekly cost of episodes:
@@ -463,7 +466,7 @@ conr::round_sensibly(m_episode_cost)
 
 -   Bevacizumab is Avastin.
 
--   DOXORUBICINE PEGYLATED is Caelyx.
+-   DOXORUBICINE PEGYLATED / DOXORUBICIN is Caelyx.
 
 -   Trabectedin is Yondelis. 
 
@@ -479,8 +482,11 @@ df_drug_costs <- df_drug_costs |>
 df_drug_costs <- df_drug_costs |> 
   separate_wider_delim(cols = drug, delim = " ", names = c("drug", "unit"), 
                        too_many = "merge") |> 
-  mutate(quantity_ml = as.double(str_extract(unit, "([0-9]*\\.?[0-9]+) ML\\)", group = 1)),
-         quantity_mg = as.double(str_extract(unit, "([0-9]*\\.?[0-9]+) MG", group = 1)),
+  mutate(unit = str_replace(unit, "([0-9]*)\\.?([0-9]*)( G )", paste0("\\1", "\\2", "000", "\\3")),
+         quantity_ml = as.double(str_extract(unit, "([0-9]*\\.?[0-9]+) ML\\)", group = 1)),
+         quantity_mg = as.double(str_extract(unit, "([0-9]*\\.?[0-9]+) MG ", group = 1)),
+         mg_per_ml = as.double(str_extract(unit, "([0-9]*\\.?[0-9]*) MG\\/ML", group = 1)),
+         mg_per_vial = if_else(!is.na(quantity_mg), quantity_mg, quantity_ml * mg_per_ml),
          drug = str_to_title(drug))
 
 df_drug_costs <- df_drug_costs |> 
@@ -500,13 +506,14 @@ df_drug_costs <- df_drug_costs |>
   add_case(dox) |> 
   arrange(drug, cost)
 
-df_drug_costs <- df_drug_costs |> 
-  mutate(quant = if_else(!is.na(quantity_ml), quantity_ml, quantity_mg))
-
 df_drug_costs
+
+# str_extract(df_drug_costs$unit, "([0-9]*\\.?[0-9]+) MG/ML", group = 1)
 ```
 
 ### Drug Dosing
+
+-   Measured in mg.
 
 ```{r}
 df_drug_doses <- read_xlsx("delgado_parameters.xlsx", sheet = 3, skip = 2) |> 
@@ -556,7 +563,7 @@ m_drug_use <- df_drug_use |>
 
 -   Initial, one-off treatment which most receive, and subsequent treatment according to the trace.
 
--   Dependent on stage only for first line. Second line only administered when in progressed state.
+-   CT dependent on stage only for first line. Second line only administered when in progressed state.
 
 -   How do later lines work?
 
@@ -573,7 +580,7 @@ m_drug_use <- df_drug_use |>
 fn_calc_drugs <- function(drug_name, stage = "stage_i") {
   
   df_drug = filter(df_drug_costs, drug == drug_name)
-  quantities = df_drug$quant
+  quantities = df_drug$mg_per_vial
   cost = df_drug$cost
   dose = m_drug_doses[drug_name, stage]
   
@@ -586,7 +593,7 @@ fn_calc_drugs <- function(drug_name, stage = "stage_i") {
   
   tibble(drug = df_drug$drug,
          info = df_drug$unit,
-         ml = as.vector(opt$constraints)[-c(length(opt$constraints), 
+         mg = as.vector(opt$constraints)[-c(length(opt$constraints), 
                                                length(opt$constraints) - 1)],
          unit_cost = opt$objective,
          dose_needed = dose,
@@ -604,7 +611,7 @@ fn_calc_all_drugs <- function() {
   
   df = tibble(drug = NA,
               info = NA,
-              ml = NA,
+              mg = NA,
               unit_cost = NA,
               dose_needed = NA,
               stage = NA,
@@ -636,7 +643,7 @@ m_costed_drugs |> conr::round_sensibly()
 
 ### CT Questions
 
--   Maybe model starts immediately after surgery, so pre-surgical chemo is guaranteed, as is first cycle of post-surgical chemo. Subsequent cycles are not guaranteed.
+-   Maybe model starts immediately after surgery, so neoadjuvant CT is guaranteed, as is first cycle of post-surgical CT. Subsequent two cycles are not guaranteed.
 
 -   Per paper: 
 
@@ -646,7 +653,11 @@ m_costed_drugs |> conr::round_sensibly()
     -   Advanced treatment for Stage III post-progression and both states for Stage IV. **But they haven't defined advanced chemotherapy...**
 <br><br>
 
--   Are the calculated costs only for a single cycle (and treatment requires 6)? How do you keep track of what cycle they should be up to without tunnel states? How do you track lines of treatment?
+-   Are the calculated costs only for a single cycle (and treatment requires 6)? 
+
+-   How do you keep track of what cycle they should be up to without tunnel states? 
+
+-   How do you track lines of treatment? As people transition to Progressed state, they should start cycle 1 of line 2. How do you know when they have had 6 cycles and completed line 2?
 
 ### Neoadjuvant Cost
 
@@ -657,27 +668,24 @@ m_costed_drugs |> conr::round_sensibly()
 ```{r}
 # 3 cycles of palitaxel and carboplatin
 
-m_cost_neo_pp_3 <- m_costed_drugs[c("Carboplatin", "Paclitaxel"), 3:4] %*% 
+m_cost_neo_pp <- m_costed_drugs[c("Carboplatin", "Paclitaxel"), 3:4] %*% 
   diag(m_params[grep("neoadjuvant", rownames(m_params)), 3:4]) %*%
-  diag(m_drug_use[c("Carboplatin", "Paclitaxel"), "line1_stages_iii_iv"]) *
-  3
+  diag(m_drug_use[c("Carboplatin", "Paclitaxel"), "line1_stages_iii_iv"])
 
-colnames(m_cost_neo_pp_3) <- c("III", "IV")
-m_cost_neo_pp_3
+colnames(m_cost_neo_pp) <- c("III", "IV")
+m_cost_neo_pp
 
 # Assume they get another 3 regardless of state? Or only those in Stable?
 
 ```
 
-### Adjuvant
+### Adjuvant: Cost per person, per cycle
 
 -   Post-surgical treatment for Stages I, II, and III in Stable state only for first 6 cycles.
 
 -   Do I want track how much has been spent on each drug? Yes (and tracking drug spending as a category would be a bare minimum). How? An array with the following dimensions: stage, cycle, (from state, to state, )... Maybe this array doesn't need everything, it can use the transition matrix and the trace for calculations... Separate arrays for each cost category rather than separate dimensions?
 
 ```{r}
-m_params[v_names_tmt_strategy, ]
-
 m_line1_use <- df_drug_use |> 
   select(1:3) |> 
   rename(stage_i = line1_stages_i_ii,
@@ -688,11 +696,9 @@ m_line1_use <- df_drug_use |>
   arrange(drug) |> 
   column_to_rownames("drug") |> 
   as.matrix()
-m_line1_use
+# m_line1_use
 
 m_line1_use <- ifelse(is.na(m_line1_use), 0, m_line1_use)
-
-m_costed_drugs
 
 m_cost_adjuvant <- 
   m_line1_use[rownames(m_costed_drugs), ] * 
@@ -725,7 +731,7 @@ a_costs <- array(data = 0,
                  dim = c(n_cycles + 1, 
                          4,
                          length(rownames(m_costed_drugs))), 
-                 dimnames = list("cycle" = 0:n_cycles,
+                 dimnames = list("cycle" = 0:n_cycles, # the order is switched from other arrays...bad?
                                  "stage" = v_names_stages,
                                  "drug_cost" = rownames(m_costed_drugs)))
 
@@ -733,27 +739,33 @@ a_costs <- array(data = 0,
 
 ## three cycles before surgery
 
-a_costs["0", colnames(m_cost_neo_pp_3), rownames(m_cost_neo_pp_3)] <- 
-  a_costs["0", colnames(m_cost_neo_pp_3), rownames(m_cost_neo_pp_3)] +
-  m_cost_neo_pp_3 %*% diag(a_trace["Stable", colnames(m_cost_neo_pp_3) , "0"])
+a_costs["0", colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] <- 
+  a_costs["0", colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] +
+  m_cost_neo_pp %*% diag(a_trace["Stable", colnames(m_cost_neo_pp) , "0"]) * 3
 
 ## what about three cycles post-surgery?
 
+1:3 |> 
+  walk(\(x) a_costs[x, colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] <<- 
+         a_costs[x, colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] +
+         m_cost_neo_pp %*% diag(a_trace["Stable", colnames(m_cost_neo_pp) , x])
+  )
+
+
+
 # Adjuvant
 
-# first cycle
+# first 6 cycles
 
-a_costs["0", , ] <- 
-  a_costs["0", , ] +
-  t(m_cost_adjuvant %*% diag(a_trace["Stable", , "0"]))
+1:6 |> 
+  walk(\(x) a_costs[x, , ] <<- 
+         a_costs[x, , ] +
+         t(m_cost_adjuvant %*% diag(a_trace["Stable", , x]))
+  )
 
-# second cycle, received in second period
-
-a_costs["1", , ] <- 
-  a_costs["1", , ] +
-  t(m_cost_adjuvant %*% diag(a_trace["Stable", , "1"]))
-
-a_costs["0", , ] |> conr::round_sensibly() |> format(big.mark = ",", scientific = 999)
+a_costs["0", , ] |> 
+  conr::round_sensibly() |> 
+  format(big.mark = ",", scientific = 999)
 
 ```
 
