@@ -51,14 +51,19 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   How to add calculations for 2nd to 7th lines? No tunnel states, so no way of knowing which line is applicable. Same issue exists within lines as patients could change states between cycles.
 
-      -   See Cheng 2021: they assume everyone in Progressed state is receiving treatment.
+      -   See Cheng 2021: they assume everyone in Progressed state is receiving treatment and assign portions to each treatment line.
+      
+-   Survival: I thought they used median survival time from Heintz 2006, but only Stages III and IV observe median survival, so I'm not sure how they parametrise Stages I and II. Also, Heintz only presents for sub-stages, not the 4 usual stages, though perhaps Delgado aggregated the groups.
 
-# Sidenote
+# Aside
 
 -   Appears you can't use arithmetic and pipe the result. Perform arithmetic and assign to object, then perform other functions in pipe chain.
 
     -   e.g. 1.5 + 1 |> round() = 2.5 but 1 + 1.5 |> round() = 3, since 1.5 gets rounded to 2.
     -   See [here](https://stackoverflow.com/questions/72352994/different-outputs-with-pipe-after-arithmetic-operator-vs-calling-it-directly):  the pipe precedes arithmetic functions in order of operations.
+<br><br>
+
+-   See Hawkins 2005: semi-Markov relies on a 3-D transition matrix (from state, to state, t) where t is time spent in current state.
 
 # DARTH Framework (Alarid 2023)
 
@@ -74,6 +79,7 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
       -   a: array (generalisation of matrix)
       -   df: dataframe
 <br><br>
+
 -   Arrays are preferred to dataframes due to easier indexing and multiplication.
 
 # Replication of Delgado
@@ -148,8 +154,6 @@ df_bgr_mort
 $$S(t_{med}) = \frac{1}{2}$$
 $$e^{-\lambda t_{med}} = \frac{1}{2}$$
 $$t_{med} = \frac{\ln(2)}{\lambda}$$
-
-      -   Alternately:
 
 $$\lambda = \frac{\ln(2)}{t_{med}}$$
 
@@ -310,6 +314,26 @@ ggplot(data = df_trace) +
   facet_wrap(vars(Stage), nrow = 1)
 ```
 
+```{r}
+df_trace_normalised <- as.data.frame(aperm(a_trace)) |> 
+  mutate(Cycle = 0:n_cycles) |> 
+  pivot_longer(cols = -(Cycle), 
+               names_to = c("Stage", "State"),
+               names_sep = "\\.",
+               values_to = "Portion") |> 
+  mutate(Portion = Portion * 1 / v_init_stages,
+         Year = Cycle * n_cycle_length,
+         State = factor(State, 
+                        levels = c("Stable", "Progressed", "Dead"), 
+                        ordered = TRUE))
+  
+
+ggplot(data = df_trace_normalised) +
+  geom_line(aes(x = Year, y = Portion, colour = Stage)) + 
+  facet_wrap(vars(State))
+
+```
+
 # Costs
 
 -   Storing parameters:
@@ -366,8 +390,6 @@ m_params <- clean_names(m_params)
 ```
 
 ### Calculate Volume of Services
-
--   Should I name all these vectors using stage names, where relevant? eg v_init_stages.
 
 ```{r, results='hold'}
 # initial surgery
@@ -507,8 +529,6 @@ df_drug_costs <- df_drug_costs |>
   arrange(drug, cost)
 
 df_drug_costs
-
-# str_extract(df_drug_costs$unit, "([0-9]*\\.?[0-9]+) MG/ML", group = 1)
 ```
 
 ### Drug Dosing
@@ -560,8 +580,6 @@ m_drug_use <- df_drug_use |>
 ```
 
 ### CT Drug Calculations
-
--   Initial, one-off treatment which most receive, and subsequent treatment according to the trace.
 
 -   CT dependent on stage only for first line. Second line only administered when in progressed state.
 
@@ -648,42 +666,33 @@ m_costed_drugs |> conr::round_sensibly()
 -   Per paper: 
 
     -   Neoadjuvant receive 3 cycles of paclitaxel with carboplatin prior to surgery and 3 cycles post-surgery.
-    -   Adjuvant administered post-surgery in Stable state.
+    -   Adjuvant administered post-surgery in Stable state (I, II, and III).
     -   Post-progression chemo administered post-progression for Stages I and II.
     -   Advanced treatment for Stage III post-progression and both states for Stage IV. **But they haven't defined advanced chemotherapy...**
 <br><br>
 
--   Are the calculated costs only for a single cycle (and treatment requires 6)? 
-
--   How do you keep track of what cycle they should be up to without tunnel states? 
-
 -   How do you track lines of treatment? As people transition to Progressed state, they should start cycle 1 of line 2. How do you know when they have had 6 cycles and completed line 2?
 
-### Neoadjuvant Cost
+### Neoadjuvant Cost: per person, per cycle
 
 -   3 cycles prior to surgery (Carboplatin and Paclitaxel specified), plus another 3 post-surgery (same treatment? For Stable state only?)
 
 -   Restricted to Stages III and IV.
 
-```{r}
-# 3 cycles of palitaxel and carboplatin
+-   These figures are weighted by the portion of people who receive neoadjuvant CT and first-line Carboplatin and Paclitaxel. So, these costs are per person in each stage, not per person who receives this treatment.
 
+```{r}
 m_cost_neo_pp <- m_costed_drugs[c("Carboplatin", "Paclitaxel"), 3:4] %*% 
   diag(m_params[grep("neoadjuvant", rownames(m_params)), 3:4]) %*%
   diag(m_drug_use[c("Carboplatin", "Paclitaxel"), "line1_stages_iii_iv"])
 
 colnames(m_cost_neo_pp) <- c("III", "IV")
 m_cost_neo_pp
-
-# Assume they get another 3 regardless of state? Or only those in Stable?
-
 ```
 
 ### Adjuvant: Cost per person, per cycle
 
 -   Post-surgical treatment for Stages I, II, and III in Stable state only for first 6 cycles.
-
--   Do I want track how much has been spent on each drug? Yes (and tracking drug spending as a category would be a bare minimum). How? An array with the following dimensions: stage, cycle, (from state, to state, )... Maybe this array doesn't need everything, it can use the transition matrix and the trace for calculations... Separate arrays for each cost category rather than separate dimensions?
 
 ```{r}
 m_line1_use <- df_drug_use |> 
@@ -705,8 +714,7 @@ m_cost_adjuvant <-
   m_costed_drugs %*% 
   diag(m_params[grep("_adjuvant", rownames(m_params)), ])
 
-m_cost_adjuvant  
- 
+m_cost_adjuvant
 ```
 
 ### Subsequent Lines of Treatment
@@ -718,9 +726,9 @@ df_drug_use |>
   select(-c(contains("line1")))
 ```
 
+## Initialise Cost Array
 
-
-# Initialise Cost Matrix
+-   Maybe the cost array doesn't need everything, it can use the transition matrix and the trace for calculations... Separate arrays for each cost category rather than separate dimensions?
 
 -   Bring the per person cost here, multiply trace for total cost at each cycle, for each stage. Multiply by portion of patients in treatment strategy and portion of patients who receive drug.
 
@@ -743,7 +751,7 @@ a_costs["0", colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] <-
   a_costs["0", colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] +
   m_cost_neo_pp %*% diag(a_trace["Stable", colnames(m_cost_neo_pp) , "0"]) * 3
 
-## what about three cycles post-surgery?
+## what about three cycles post-surgery? Assume they need to be in Stable.
 
 1:3 |> 
   walk(\(x) a_costs[x, colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] <<- 
@@ -751,11 +759,9 @@ a_costs["0", colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] <-
          m_cost_neo_pp %*% diag(a_trace["Stable", colnames(m_cost_neo_pp) , x])
   )
 
-
-
 # Adjuvant
 
-# first 6 cycles
+# 6 cycles following surgery
 
 1:6 |> 
   walk(\(x) a_costs[x, , ] <<- 
@@ -765,8 +771,11 @@ a_costs["0", colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] <-
 
 a_costs["0", , ] |> 
   conr::round_sensibly() |> 
-  format(big.mark = ",", scientific = 999)
-
+  format(big.mark = ",") |>
+  t() |> 
+  as.data.frame() |> 
+  rownames_to_column(var = "Drug") |> 
+  as_tibble()
 ```
 
 ### Palliative drugs
@@ -785,7 +794,5 @@ df_drug_pall
 
 ```{r}
 anti_join(df_drug_costs, df_drug_doses, by = "drug")
-
-
 ```
 
