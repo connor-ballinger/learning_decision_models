@@ -19,6 +19,26 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 ```
 
+# To do
+
+-   **23/10 Try incorporating subsequent lines of treatment by tracking length of time in progressed state. Will have to use some kind of blanket rule - every x months, all patients in progressed state receive next treatment.**
+
+-   **16/10 Don't think I can go any further - see questions below.**
+
+-   Add yearly cohort with pop growth. 
+
+# Questions
+
+-   How to add calculations for 2nd to 7th lines? No tunnel states, so no way of knowing which line is applicable. Same issue exists within lines as patients could change states between cycles.
+
+      -   See Cheng 2021: I think they assume everyone in Progressed state is receiving treatment and assign portions to each treatment line. The source for these portions is Friedlander 2018 (Study-19), which has a supplementary table that states what portion of initial population eventually recieved each line of treatment. But, I think this would underestimate how many receive each treatment as censoring is obviously present. Overall, I think there needs to be something better.
+      
+      -   Point remains, Delgado doesn't seem to have done this.
+      
+-   Survival: I thought they used median survival time from Heintz 2006, but only Stages III and IV observe median survival, so I'm not sure how they parameterise Stages I and II. Also, Heintz only presents for sub-stages, not the 4 usual stages, though perhaps Delgado aggregated the groups.
+
+      -   Delgado did it in reverse. Did not have median PFS/OS for each stage, but does have portions at five years.
+
 # Overview
 
 -   Epithelial OC (90% of OC is used).
@@ -40,20 +60,6 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 # Assumptions
 
 -   Neoadjuvant CT and all surgical treatment is administered in the first cycle, essentially as start-up costs.
-
-# To do
-
--   Add yearly cohort with pop growth too. 
-
--   Construct a critique, including any Aus contextual factors.
-
-# Questions
-
--   How to add calculations for 2nd to 7th lines? No tunnel states, so no way of knowing which line is applicable. Same issue exists within lines as patients could change states between cycles.
-
-      -   See Cheng 2021: they assume everyone in Progressed state is receiving treatment and assign portions to each treatment line.
-      
--   Survival: I thought they used median survival time from Heintz 2006, but only Stages III and IV observe median survival, so I'm not sure how they parametrise Stages I and II. Also, Heintz only presents for sub-stages, not the 4 usual stages, though perhaps Delgado aggregated the groups.
 
 # Aside
 
@@ -717,15 +723,6 @@ m_cost_adjuvant <-
 m_cost_adjuvant
 ```
 
-### Subsequent Lines of Treatment
-
--   How does this work? 
-
-```{r}
-df_drug_use |> 
-  select(-c(contains("line1")))
-```
-
 ## Initialise Cost Array
 
 -   Maybe the cost array doesn't need everything, it can use the transition matrix and the trace for calculations... Separate arrays for each cost category rather than separate dimensions?
@@ -736,26 +733,29 @@ df_drug_use |>
 
 ```{r}
 a_costs <- array(data = 0, 
-                 dim = c(n_cycles + 1, 
+                 dim = c(nrow(m_costed_drugs),
                          4,
-                         length(rownames(m_costed_drugs))), 
-                 dimnames = list("cycle" = 0:n_cycles, # the order is switched from other arrays...bad?
+                         n_cycles + 1), 
+                 dimnames = list("drug_cost" = rownames(m_costed_drugs),
                                  "stage" = v_names_stages,
-                                 "drug_cost" = rownames(m_costed_drugs)))
+                                 "cycle" = 0:n_cycles))
+
+# Is there a need to add the State dimension? Not really interested in how cost
+# varies by State, just need to account for it. So probably omit.
 
 # Neoadjuvant
 
 ## three cycles before surgery
 
-a_costs["0", colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] <- 
-  a_costs["0", colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] +
+a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), "0"] <- 
+  a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), "0"] +
   m_cost_neo_pp %*% diag(a_trace["Stable", colnames(m_cost_neo_pp) , "0"]) * 3
 
 ## what about three cycles post-surgery? Assume they need to be in Stable.
 
 1:3 |> 
-  walk(\(x) a_costs[x, colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] <<- 
-         a_costs[x, colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] +
+  walk(\(x) a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), x] <<- 
+         a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), x] +
          m_cost_neo_pp %*% diag(a_trace["Stable", colnames(m_cost_neo_pp) , x])
   )
 
@@ -764,19 +764,30 @@ a_costs["0", colnames(m_cost_neo_pp), rownames(m_cost_neo_pp)] <-
 # 6 cycles following surgery
 
 1:6 |> 
-  walk(\(x) a_costs[x, , ] <<- 
-         a_costs[x, , ] +
-         t(m_cost_adjuvant %*% diag(a_trace["Stable", , x]))
+  walk(\(x) a_costs[, , x] <<- 
+         a_costs[, , x] +
+         m_cost_adjuvant %*% diag(a_trace["Stable", , x])
   )
 
-a_costs["0", , ] |> 
+a_costs[, , "5"] |> 
   conr::round_sensibly() |> 
   format(big.mark = ",") |>
-  t() |> 
   as.data.frame() |> 
   rownames_to_column(var = "Drug") |> 
   as_tibble()
+
+a_costs[, , 1:2]
 ```
+
+### Post-Progression CT (Subsequent Lines)
+
+-   How does this work? Should there be an estimate of how many people are on each line at any given moment?
+
+```{r}
+df_drug_use |> 
+  select(-c(contains("line1")))
+```
+
 
 ### Palliative drugs
 
