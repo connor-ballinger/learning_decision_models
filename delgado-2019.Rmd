@@ -27,6 +27,8 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   Add yearly cohort with pop growth. 
 
+-   Fix notes on Heintz survival extrapolation.
+
 # Questions
 
 -   How to add calculations for 2nd to 7th lines? No tunnel states, so no way of knowing which line is applicable. Same issue exists within lines as patients could change states between cycles.
@@ -69,7 +71,7 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
     -   See [here](https://stackoverflow.com/questions/72352994/different-outputs-with-pipe-after-arithmetic-operator-vs-calling-it-directly):  the pipe precedes arithmetic functions in order of operations.
 <br><br>
 
--   See Hawkins 2005: semi-Markov relies on a 3-D transition matrix (from state, to state, t) where t is time spent in current state.
+-   **See Hawkins 2005**: semi-Markov relies on a 3-D transition matrix (from state, to state, t) where t is time spent in current state. I think this is necessary, don't believe my current transition array captures this, right?? I know what portion transitions in and out each cycle... Imagine after 10 cycles - people have been in there for 0-9 cycles... I think I need more structure to track this...
 
 # DARTH Framework (Alarid 2023)
 
@@ -82,7 +84,7 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
       -   n: number
       -   v: vector
       -   m: matrix
-      -   a: array (generalisation of matrix)
+      -   a: array
       -   df: dataframe
 <br><br>
 
@@ -120,7 +122,7 @@ df_ages
 
 ## Transitions
 
--   Formulas in Delgado suggest probabilities vary over time, but they have assumed exponential so I don't see how.
+-   Delgado assumed exponential distribution - time-constant probabilities (though background mortality varies by age).
 
 -   Annual rates converted to 3-weekly rates by multiplying by 3/52.
 
@@ -156,6 +158,8 @@ df_bgr_mort
 ### Transition Rates - Heintz 2006
 
 -   Median 5-year PFS and OS were published by stage. Delgado extrapolated assuming an exponential distribution.
+
+-   **Change this - think they used portions published in Heintz, as opposed to t at median survival.**
 
 $$S(t_{med}) = \frac{1}{2}$$
 $$e^{-\lambda t_{med}} = \frac{1}{2}$$
@@ -223,7 +227,7 @@ a_prob["Dead", "Stable", , ] <-
 
 a_prob["Dead", "Dead", , ] <- 1
 
-# Use purrr::walk fn such that assignments made for each Stage
+# Use purrr::walk such that assignments made for each Stage
 
 # S to P
 v_names_stages |> 
@@ -254,6 +258,102 @@ v_names_stages |>
 a_prob[, ,c("I", "IV") , c(1, n_cycles + 1)] |> round(3)
 ```
 
+Only interested in amount of time in Progressed state - tunnel states might be best. Also, having both time- and state-dependence causes redundancy - e.g. cycle 0 still has dimensions for every single possibility for state-dependence.
+
+But tunnel states increase dimensions even more than the alternative.
+
+```{r}
+a_prob_semi <- array(data = as.double(NA), 
+                     dim = c(3, 3, 4, (n_cycles+1), (n_cycles + 1)), 
+                     dimnames = list("from" = v_names_states, 
+                                     "to" = v_names_states,
+                                     "stage" = v_names_stages,
+                                     "sojourn" = 0:n_cycles,
+                                     "cycle" = 0:n_cycles))
+#a_prob_semi[, , "I", 1:2, 1:2]
+
+# Prevent some transitions
+
+a_prob_semi["Dead", "Stable", , , ] <- 
+  a_prob_semi["Dead", "Progressed", , , ] <- 
+  a_prob_semi["Progressed", "Stable", , , ] <- 0
+
+# Dead stay dead
+
+a_prob_semi["Dead", "Dead", , , ] <- 1
+
+# Use purrr::walk such that assignments made for each Stage
+
+# S to P
+v_names_stages |> 
+  walk(\(x) a_prob_semi["Stable", "Progressed", x, , ] <<- 
+         df_prob_stages[[x]]$prob_s_p)
+
+# S to D
+v_names_stages |> 
+  walk(\(x) a_prob_semi["Stable", "Dead", x, , ] <<-  
+         df_prob_stages[[x]]$prob_s_d)
+
+# P to D
+v_names_stages |> 
+  walk(\(x) a_prob_semi["Progressed", "Dead", x, , ] <<- 
+         df_prob_stages[[x]]$prob_p_d)
+
+# S to S means neither S to P nor S to D occur
+v_names_stages |> 
+  walk(\(x) a_prob_semi["Stable", "Stable", x, , ] <<- 
+         (1 - a_prob_semi["Stable", "Progressed", x, , ] - 
+            a_prob_semi["Stable", "Dead", x, , ]))
+
+# P to P means P to D does not occur
+v_names_stages |> 
+  walk(\(x) a_prob_semi["Progressed", "Progressed", x, , ] <<- 
+         (1 - a_prob_semi["Progressed", "Dead", x, , ]))
+
+
+```
+
+
+```{r}
+a_trace_semi <- array(data = NA, 
+                      dim = c(3, 4, (n_cycles+1), (n_cycles+1)), 
+                      dimnames = list("state" = v_names_states,
+                                      "stage" = v_names_stages,
+                                      "sojourn" = 0:n_cycles,
+                                      "cycle" = 0:n_cycles))
+
+a_trace_semi[, , "0", "0"] <- v_init_states %o% v_init_stages
+
+
+for (stage in v_names_stages) {
+  for (t in 2:(n_cycles + 1)) { # indexing by integer, not cycle name. cycle_name = integer - 1.
+    for (sojourn in 1:n_cycles) {
+      
+      a_trace_semi[, stage, sojourn, t] <- 
+        a_trace_semi[, stage, sojourn, t-1] %*% 
+        a_prob_semi[, , stage, sojourn, t]
+    
+    }
+  }
+}
+
+a_trace_semi[, , 1:2, 1:2]
+rm(stage, t)
+```
+
+
+```{r}
+v_names_tunnels <- c("Stable", paste0("Progressed_", 0:n_cycles), "Dead")
+
+a_tunnel_prob <- array(data = as.double(NA), 
+                  dim = c(length(v_names_tunnels), length(v_names_tunnels), 4, (n_cycles + 1)), 
+                  dimnames = list("from" = v_names_tunnels, 
+                                  "to" = v_names_tunnels,
+                                  "stage" = v_names_stages,
+                                  "cycle" = 0:n_cycles))
+# More than 20x the size of the alternative
+```
+
 ## Checks
 
 ```{r}
@@ -267,6 +367,7 @@ for (stage in v_names_stages) {
   }
 }
 tracker # should be zero
+rm(stage, t, tracker)
 ```
 
 ## Construct Trace
@@ -295,6 +396,8 @@ for (stage in v_names_stages) {
 
 a_trace[, , c(1, n_cycles + 1)] |> 
   round()
+
+rm(stage, t)
 ```
 
 ## Gather Results
@@ -781,11 +884,19 @@ a_costs[, , 1:2]
 
 ### Post-Progression CT (Subsequent Lines)
 
--   How does this work? Should there be an estimate of how many people are on each line at any given moment?
+-   How does this work? Should there be an estimate of how many people are on each line at any given moment? Also, not everyone would receive 7 lines of treatment - Delgado should account for this somehow.
+
+-   Median OS is never more than 1.3 years greater than median PFS - not much time to get through another 6 lines of treatment, at least in the median case.
 
 ```{r}
 df_drug_use |> 
   select(-c(contains("line1")))
+
+
+a_costs[, , 2] <- a_costs[, , 2] +
+  m_costed_drugs * 
+  m_drug_use[, "line2"] %*% 
+  t(a_trace["Progressed", , 2])
 ```
 
 
