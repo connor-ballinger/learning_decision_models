@@ -272,7 +272,7 @@ a_prob_semi <- array(data = as.double(NA),
                                      "stage" = v_names_stages,
                                      "cycle" = 0:n_cycles,
                                      "sojourn" = 0:n_cycles))
-#a_prob_semi[, , "I", 1:2, 1:2]
+
 
 # Prevent some transitions
 
@@ -313,15 +313,19 @@ v_names_stages |>
          (1 - a_prob_semi["Progressed", "Dead", x, , ]))
 
 # Logically, sojourn must not be greater than current cycle
-for (cycle in 0:n_cycles + 1) {
-  for (sojourn in 0:(n_cycles + 1)) { # no fkn clue... behaving as char, not int? Should be 1:blah, not 0:
-    if (sojourn > cycle) {
+dims_a_prob_semi <- dimnames(a_prob_semi)
+
+for (cycle in dims_a_prob_semi[["cycle"]]) {
+  for (sojourn in dims_a_prob_semi[["sojourn"]]) {
+    
+    if (as.integer(sojourn) > as.integer(cycle)) {
       a_prob_semi[, , , cycle, sojourn] <- NA
     }
+    
   }
 }
-
-a_prob_semi[, , "I", 1:2, 1:2, drop = FALSE] |>
+head(which(is.na(a_prob_semi), arr.ind = TRUE))
+a_prob_semi[, , "I", 170:174, 170:174, drop = FALSE] |>
   aperm(perm = c("from", "to", "stage", "sojourn", "cycle")) |>
   round(3)
 ```
