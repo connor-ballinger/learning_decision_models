@@ -934,14 +934,14 @@ a_costs <- array(data = 0,
 
 a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), "0"] <- 
   a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), "0"] +
-  m_cost_neo_pp %*% diag(a_trace["Stable", colnames(m_cost_neo_pp) , "0"]) * 3
+  (m_cost_neo_pp %*% diag(a_trace_semi["Stable", colnames(m_cost_neo_pp), "0", "0"])) * 3
 
 ## what about three cycles post-surgery? Assume they need to be in Stable.
 
 1:3 |> 
   walk(\(x) a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), x] <<- 
          a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), x] +
-         m_cost_neo_pp %*% diag(a_trace["Stable", colnames(m_cost_neo_pp) , x])
+         m_cost_neo_pp %*% diag(rowSums(a_trace_semi["Stable", colnames(m_cost_neo_pp), x, ], na.rm = TRUE))
   )
 
 # Adjuvant
@@ -951,7 +951,7 @@ a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), "0"] <-
 1:6 |> 
   walk(\(x) a_costs[, , x] <<- 
          a_costs[, , x] +
-         m_cost_adjuvant %*% diag(a_trace["Stable", , x])
+         m_cost_adjuvant %*% diag(rowSums(a_trace_semi["Stable", , x, ], na.rm = TRUE))
   )
 
 a_costs[, , "5"] |> 
@@ -961,14 +961,17 @@ a_costs[, , "5"] |>
   rownames_to_column(var = "Drug") |> 
   as_tibble()
 
-a_costs[, , 1:2]
+a_costs[1:2, , 1:2, drop = FALSE]
 ```
+
+-   See above: slight discrepancy for Carboplatin cost for Stage IV for cycles 1, 2 (and maybe more). Can't see why... Bevacizumab is fine.
+
 
 ### Post-Progression CT (Subsequent Lines)
 
 -   How does this work? Should there be an estimate of how many people are on each line at any given moment? Also, not everyone would receive 7 lines of treatment - Delgado should account for this somehow.
 
--   Median OS is never more than 1.3 years greater than median PFS - not much time to get through another 6 lines of treatment, at least in the median case.
+-   Median OS is never more than 1.3 years greater than median PFS - not much time to get through another 6 lines of treatment, at least in half of cases.
 
 ```{r}
 df_drug_use |> 
@@ -978,7 +981,8 @@ df_drug_use |>
 a_costs[, , 2] <- a_costs[, , 2] +
   m_costed_drugs * 
   m_drug_use[, "line2"] %*% 
-  t(a_trace["Progressed", , 2])
+  t(rowSums(a_trace_semi["Progressed", , 2, ], na.rm = TRUE))
+a_costs[, , 2]
 ```
 
 
