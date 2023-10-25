@@ -21,7 +21,7 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 # To do
 
--   **23/10 Try incorporating subsequent lines of treatment by tracking length of time in progressed state. Will have to use some kind of blanket rule - every x months, all patients in progressed state receive next treatment.**
+-   **23/10 Try incorporating subsequent lines of treatment by tracking length of time in progressed state. Will have to use some kind of blanket rule - every x months, all patients in progressed state receive next treatment.** Using exhaustive tunnel states for Progressed state resulted in a probability array which was more than 20 times the size (w.r.t. memory) of the sojourn array.
 
 -   **16/10 Don't think I can go any further - see questions below.**
 
@@ -72,6 +72,8 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 <br><br>
 
 -   **See Hawkins 2005**: semi-Markov relies on a 3-D transition matrix (from state, to state, t) where t is time spent in current state. I think this is necessary, don't believe my current transition array captures this, right?? I know what portion transitions in and out each cycle... Imagine after 10 cycles - people have been in there for 0-9 cycles... I think I need more structure to track this...
+
+-   Use `drop = FALSE` when printing arrays for more explicit labelling.
 
 # DARTH Framework (Alarid 2023)
 
@@ -310,19 +312,18 @@ v_names_stages |>
   walk(\(x) a_prob_semi["Progressed", "Progressed", x, , ] <<- 
          (1 - a_prob_semi["Progressed", "Dead", x, , ]))
 
-
+# Logically, sojourn must not be greater than current cycle
 for (cycle in 0:n_cycles + 1) {
-  for (sojourn in 0:(n_cycles + 1)) { # struggling with indexing for some reason. Behaving as char?
+  for (sojourn in 0:(n_cycles + 1)) { # no fkn clue... behaving as char, not int? Should be 1:blah, not 0:
     if (sojourn > cycle) {
       a_prob_semi[, , , cycle, sojourn] <- NA
     }
   }
 }
 
-a_prob_semi[, , "I", 1:2, 1:2] |> aperm(perm = c("from", "to", "sojourn", "cycle"))
-
-# head(which(is.na(a_prob_semi), arr.ind = TRUE), n = 10)
-
+a_prob_semi[, , "I", 1:2, 1:2, drop = FALSE] |>
+  aperm(perm = c("from", "to", "stage", "sojourn", "cycle")) |>
+  round(3)
 ```
 
 Maybe name dimensions of arrays when subsetting?
@@ -379,11 +380,18 @@ for (stage in v_names_stages) {
 }
 
 
-a_trace_semi[, "I", 1:5, 1:5] |> aperm(perm = c("state", "sojourn", "cycle"))
- 
-a_trace_semi[, , 174, ] |> rowSums(na.rm = TRUE, dims = 2L)
-
+a_trace_semi[, , 1:3, 1:3, drop = FALSE] |> 
+  aperm(perm = c("state", "stage", "sojourn", "cycle"))
 ```
+
+-   A simpler look, using Stage I only:
+
+```{r}
+a_trace_semi[, "I", 1:3, 1:3, drop = FALSE] |> 
+  aperm(perm = c("state", "sojourn", "cycle", "stage"))
+```
+
+-   Tunnels approach is slow.
 
 ```{r}
 # v_names_tunnels <- c("Stable", paste0("Progressed_", 0:n_cycles), "Dead")
@@ -394,19 +402,21 @@ a_trace_semi[, , 174, ] |> rowSums(na.rm = TRUE, dims = 2L)
 #                                   "to" = v_names_tunnels,
 #                                   "stage" = v_names_stages,
 #                                   "cycle" = 0:n_cycles))
-# More than 20x the size of the alternative
 ```
 
 ## Checks
 
 ```{r}
-sum(a_prob >= 0 & a_prob <= 1) - length(a_prob)
+# No illegal probs
+sum(a_prob_semi >= 0 & a_prob_semi <= 1, na.rm = TRUE) - length(which(!is.na(a_prob_semi)))
 
+# Probs sum to 1
+## Recall probs haven't varied by sojourn in Delgado, so can fix sojourn
 tracker <- 0
 
 for (stage in v_names_stages) {
   for (t in 1:n_cycles+1) {
-    tracker = tracker + rowSums(a_prob[, , stage, t]) - 1
+    tracker = tracker + rowSums(a_prob_semi[, , stage, t, 1]) - 1
   }
 }
 tracker # should be zero
@@ -443,7 +453,7 @@ a_trace[, , c(1, n_cycles + 1)] |>
 rm(stage, t)
 ```
 
-## Gather Results
+## View Results
 
 ```{r}
 df_trace <- as.data.frame(aperm(a_trace)) |>
@@ -466,6 +476,8 @@ ggplot(data = df_trace) +
   facet_wrap(vars(Stage), nrow = 1)
 ```
 
+-   Normalise Stages.
+
 ```{r}
 df_trace_normalised <- as.data.frame(aperm(a_trace)) |> 
   mutate(Cycle = 0:n_cycles) |> 
@@ -482,6 +494,31 @@ df_trace_normalised <- as.data.frame(aperm(a_trace)) |>
 
 ggplot(data = df_trace_normalised) +
   geom_line(aes(x = Year, y = Portion, colour = Stage)) + 
+  facet_wrap(vars(State))
+
+```
+
+## Inspect Semi-Markov
+
+-   Not sure there is anything to see...
+
+```{r}
+str(a_trace_semi)
+df_trace_semi <- as.data.frame(aperm(a_trace_semi)) |> 
+  mutate(Sojourn = 0:n_cycles) |> 
+  pivot_longer(cols = -(Sojourn), 
+               names_to = c("Cycle", "Stage", "State"),
+               names_sep = "\\.", 
+               values_drop_na = TRUE,
+               values_to = "N") |> 
+  mutate(Cycle = as.integer(Cycle),
+         Year = Cycle * n_cycle_length,
+         State = factor(State, 
+                        levels = c("Stable", "Progressed", "Dead"), 
+                        ordered = TRUE))
+
+ggplot(data = filter(df_trace_semi, Sojourn == Cycle)) +
+  geom_line(aes(x = Cycle, y = N, colour = Stage)) +
   facet_wrap(vars(State))
 
 ```
@@ -888,6 +925,8 @@ a_costs <- array(data = 0,
 
 # Is there a need to add the State dimension? Not really interested in how cost
 # varies by State, just need to account for it. So probably omit.
+
+# Sojourn is a similar case to State.
 
 # Neoadjuvant
 
