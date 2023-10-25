@@ -268,8 +268,8 @@ a_prob_semi <- array(data = as.double(NA),
                      dimnames = list("from" = v_names_states, 
                                      "to" = v_names_states,
                                      "stage" = v_names_stages,
-                                     "sojourn" = 0:n_cycles,
-                                     "cycle" = 0:n_cycles))
+                                     "cycle" = 0:n_cycles,
+                                     "sojourn" = 0:n_cycles))
 #a_prob_semi[, , "I", 1:2, 1:2]
 
 # Prevent some transitions
@@ -311,46 +311,89 @@ v_names_stages |>
          (1 - a_prob_semi["Progressed", "Dead", x, , ]))
 
 
+for (cycle in 0:n_cycles + 1) {
+  for (sojourn in 0:(n_cycles + 1)) { # struggling with indexing for some reason. Behaving as char?
+    if (sojourn > cycle) {
+      a_prob_semi[, , , cycle, sojourn] <- NA
+    }
+  }
+}
+
+a_prob_semi[, , "I", 1:2, 1:2] |> aperm(perm = c("from", "to", "sojourn", "cycle"))
+
+# head(which(is.na(a_prob_semi), arr.ind = TRUE), n = 10)
+
 ```
 
+Maybe name dimensions of arrays when subsetting?
 
 ```{r}
-a_trace_semi <- array(data = NA, 
+v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
+names(v_init_stages) <- v_names_stages
+v_init_states <- c(1, 0, 0) # all patients start in stable state
+
+
+a_trace_semi <- array(data = NA,
                       dim = c(3, 4, (n_cycles+1), (n_cycles+1)), 
                       dimnames = list("state" = v_names_states,
                                       "stage" = v_names_stages,
-                                      "sojourn" = 0:n_cycles,
-                                      "cycle" = 0:n_cycles))
+                                      "cycle" = 0:n_cycles,
+                                      "sojourn" = 0:n_cycles))
 
 a_trace_semi[, , "0", "0"] <- v_init_states %o% v_init_stages
 
 
 for (stage in v_names_stages) {
-  for (t in 2:(n_cycles + 1)) { # indexing by integer, not cycle name. cycle_name = integer - 1.
-    for (sojourn in 1:n_cycles) {
+  for (t in 2:(n_cycles + 1)) { # indexing by integer, not cycle name. 
+    for (sojourn in 1:(n_cycles + 1)) { 
       
-      a_trace_semi[, stage, sojourn, t] <- 
-        a_trace_semi[, stage, sojourn, t-1] %*% 
-        a_prob_semi[, , stage, sojourn, t]
-    
+      if (sojourn == 1) {
+        
+        # for those changing state
+        
+        state_prev <- rowSums(a_trace_semi[, stage, t-1, ], na.rm = TRUE) # past sojourn irrelevant
+        move <- a_prob_semi[, , stage, t, sojourn] # probs don't vary by sojourn
+        diag(move) <- 0 # dealt with remainers below
+        
+        a_trace_semi[, stage, t, sojourn] <- 
+          state_prev %*% move
+        
+      } else if (between(sojourn, 2, t)) {
+        
+        # for those staying in state
+        
+        state_prev <- a_trace_semi[, stage, t-1, sojourn-1]
+        remain <- diag(a_prob_semi[, , stage, t, sojourn])
+        
+        a_trace_semi[, stage, t, sojourn] <- 
+          state_prev * remain
+        
+        
+      } else if (sojourn > t) {
+        
+        a_trace_semi[, stage, t, sojourn] <- NA
+        
+      }
     }
   }
 }
 
-a_trace_semi[, , 1:2, 1:2]
-rm(stage, t)
+
+a_trace_semi[, "I", 1:5, 1:5] |> aperm(perm = c("state", "sojourn", "cycle"))
+ 
+a_trace_semi[, , 174, ] |> rowSums(na.rm = TRUE, dims = 2L)
+
 ```
 
-
 ```{r}
-v_names_tunnels <- c("Stable", paste0("Progressed_", 0:n_cycles), "Dead")
-
-a_tunnel_prob <- array(data = as.double(NA), 
-                  dim = c(length(v_names_tunnels), length(v_names_tunnels), 4, (n_cycles + 1)), 
-                  dimnames = list("from" = v_names_tunnels, 
-                                  "to" = v_names_tunnels,
-                                  "stage" = v_names_stages,
-                                  "cycle" = 0:n_cycles))
+# v_names_tunnels <- c("Stable", paste0("Progressed_", 0:n_cycles), "Dead")
+# 
+# a_tunnel_prob <- array(data = as.double(NA), 
+#                   dim = c(length(v_names_tunnels), length(v_names_tunnels), 4, (n_cycles + 1)), 
+#                   dimnames = list("from" = v_names_tunnels, 
+#                                   "to" = v_names_tunnels,
+#                                   "stage" = v_names_stages,
+#                                   "cycle" = 0:n_cycles))
 # More than 20x the size of the alternative
 ```
 
