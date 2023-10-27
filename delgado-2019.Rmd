@@ -29,6 +29,8 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   Fix notes on Heintz survival extrapolation.
 
+-   Analysis of sojourn time.
+
 # Questions
 
 -   How to add calculations for 2nd to 7th lines? No tunnel states, so no way of knowing which line is applicable. Same issue exists within lines as patients could change states between cycles.
@@ -40,6 +42,8 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 -   Survival: I thought they used median survival time from Heintz 2006, but only Stages III and IV observe median survival, so I'm not sure how they parameterise Stages I and II. Also, Heintz only presents for sub-stages, not the 4 usual stages, though perhaps Delgado aggregated the groups.
 
       -   Delgado did it in reverse. Did not have median PFS/OS for each stage, but does have portions at five years.
+      
+-   When to implement rounding? Non-sensical for fractions of people in trace at each time point, but would equate to a lot of rounding errors.
 
 # Overview
 
@@ -262,8 +266,6 @@ a_prob[, ,c("I", "IV") , c(1, n_cycles + 1)] |> round(3)
 
 Only interested in amount of time in Progressed state - tunnel states might be best. Also, having both time- and state-dependence causes redundancy - e.g. cycle 0 still has dimensions for every single possibility for state-dependence.
 
-But tunnel states increase dimensions even more than the alternative.
-
 ```{r}
 a_prob_semi <- array(data = as.double(NA), 
                      dim = c(3, 3, 4, (n_cycles+1), (n_cycles + 1)), 
@@ -324,13 +326,14 @@ for (cycle in dims_a_prob_semi[["cycle"]]) {
     
   }
 }
-head(which(is.na(a_prob_semi), arr.ind = TRUE))
-a_prob_semi[, , "I", 170:174, 170:174, drop = FALSE] |>
+rm(cycle, sojourn)
+# head(which(is.na(a_prob_semi[, , "I", , ]), arr.ind = TRUE), n = 10)
+
+a_prob_semi[, , "I", 1:3, 1:3, drop = FALSE] |>
   aperm(perm = c("from", "to", "stage", "sojourn", "cycle")) |>
   round(3)
-```
 
-Maybe name dimensions of arrays when subsetting?
+```
 
 ```{r}
 v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
@@ -347,6 +350,8 @@ a_trace_semi <- array(data = NA,
 
 a_trace_semi[, , "0", "0"] <- v_init_states %o% v_init_stages
 
+# dims_a_trace_semi <- dimnames(a_trace_semi)
+# would be messy indexing by names as I frequently use +1 / -1.
 
 for (stage in v_names_stages) {
   for (t in 2:(n_cycles + 1)) { # indexing by integer, not cycle name. 
@@ -358,7 +363,7 @@ for (stage in v_names_stages) {
         
         state_prev <- rowSums(a_trace_semi[, stage, t-1, ], na.rm = TRUE) # past sojourn irrelevant
         move <- a_prob_semi[, , stage, t, sojourn] # probs don't vary by sojourn
-        diag(move) <- 0 # dealt with remainers below
+        diag(move) <- 0 # dealt with remainers in else if
         
         a_trace_semi[, stage, t, sojourn] <- 
           state_prev %*% move
@@ -382,7 +387,7 @@ for (stage in v_names_stages) {
     }
   }
 }
-
+rm(stage, t, sojourn, state_prev, move, remain)
 
 a_trace_semi[, , 1:3, 1:3, drop = FALSE] |> 
   aperm(perm = c("state", "stage", "sojourn", "cycle"))
@@ -415,7 +420,7 @@ a_trace_semi[, "I", 1:3, 1:3, drop = FALSE] |>
 sum(a_prob_semi >= 0 & a_prob_semi <= 1, na.rm = TRUE) - length(which(!is.na(a_prob_semi)))
 
 # Probs sum to 1
-## Recall probs haven't varied by sojourn in Delgado, so can fix sojourn
+## Recall probs haven't varied by sojourn in Delgado, so can fix sojourn, otherwise iterate over sojourn
 tracker <- 0
 
 for (stage in v_names_stages) {
@@ -459,6 +464,8 @@ rm(stage, t)
 
 ## View Results
 
+-   Descriptive stats:
+
 ```{r}
 df_trace <- as.data.frame(aperm(a_trace)) |>
   mutate(Cycle = 0:n_cycles) |> 
@@ -471,6 +478,37 @@ df_trace <- as.data.frame(aperm(a_trace)) |>
                         levels = c("Stable", "Progressed", "Dead"), 
                         ordered = TRUE))
 
+fn_alive <- function(df, states_existing, state_new, keep = TRUE) {
+  
+  if (keep) {
+    
+    df |> 
+      mutate(State_2 = case_when(State %in% states_existing ~ state_new,
+                                 .default = NA)) |> 
+      pivot_longer(cols = contains("State"), values_to = "State") |> 
+      select(-c(name)) |> 
+      reframe(Portion = sum(Portion, na.rm = TRUE), .by = c(Cycle, Stage, State, Year)) |> 
+      drop_na(State) |> 
+      mutate(State = factor(State, c("Stable", "Progressed", state_new, "Dead"), ordered = TRUE)) |> 
+      arrange(Cycle, Stage, State)
+    
+  } else { 
+    
+    df |> 
+      mutate(
+        State = fct_recode(
+          State, 
+          set_names(states_existing, rep(state_new, length(states_existing)))
+        )
+      ) |> 
+      reframe(Portion = sum(Portion, na.rm = TRUE), 
+              .by = c(Cycle, Stage, State, Year))
+    
+  }
+}
+```
+
+```{r}
 ggplot(data = df_trace) +
   geom_line(aes(x = Year, y = N, colour = Stage)) +
   facet_wrap(vars(State)) #, scales = "free_y")
@@ -502,12 +540,43 @@ ggplot(data = df_trace_normalised) +
 
 ```
 
-## Inspect Semi-Markov
+```{r}
+a_trace_norm <- a_trace
 
--   Not sure there is anything to see...
+for (cycle in dimnames(a_trace_norm)[["cycle"]]) {
+  a_trace_norm[, , cycle] <- a_trace_norm[, , cycle] %*% diag(1 / v_init_stages)
+}
+
+rowSums(a_trace_norm["Stable", , ]) * n_cycle_length
+
+colSums(a_trace_norm[c("Stable", "Progressed"), , ]) |> 
+  rowSums() *
+  n_cycle_length
+
+```
+
+## OS and PFS
 
 ```{r}
-str(a_trace_semi)
+df_graph <- df_trace_normalised |> 
+  fn_alive(c("Stable", "Progressed"), "Alive")
+
+ggplot(data = df_graph) +
+  geom_line(aes(x = Year, y = Portion, colour = Stage)) + 
+  facet_wrap(vars(State), ncol = 4)
+
+ggplot(data = filter(df_graph, State %in% c("Stable", "Alive"))) +
+  geom_line(aes(x = Year, y = Portion, colour = State)) + 
+  facet_wrap(vars(Stage), ncol = 4) +
+  labs(colour = "") +
+  scale_color_discrete(labels = c("Stable" = "PFS", "Alive" = "OS"))
+```
+
+## Inspect Semi-Markov
+
+-   How would I calculate stats around sojourn time? Also, note that censoring occurs.
+
+```{r}
 df_trace_semi <- as.data.frame(aperm(a_trace_semi)) |> 
   mutate(Sojourn = 0:n_cycles) |> 
   pivot_longer(cols = -(Sojourn), 
@@ -520,11 +589,35 @@ df_trace_semi <- as.data.frame(aperm(a_trace_semi)) |>
          State = factor(State, 
                         levels = c("Stable", "Progressed", "Dead"), 
                         ordered = TRUE))
+```
 
+```{r}
+# what's this?
+# df_trace_semi |> 
+#   filter(State == "Progressed") |> 
+#   mutate(Volume = Sojourn * N) |> 
+#   summarise(Sum = sum(Volume), .by = Stage) |> 
+#   mutate(Dead = rowSums(a_trace_semi["Dead", , "173", ], na.rm = TRUE),
+#          Ave = Sum / Dead)
+
+
+df_trace_semi |> 
+  filter(State == "Progressed") |> 
+  summarise(mean = round(mean(Sojourn)), q = list(quantile(Sojourn)), .by = Stage) |> 
+  unnest_wider(col = q)
+
+```
+
+
+```{r}
 ggplot(data = filter(df_trace_semi, Sojourn == Cycle)) +
   geom_line(aes(x = Cycle, y = N, colour = Stage)) +
   facet_wrap(vars(State))
 
+
+ggplot(data = filter(df_trace_semi, Cycle > 0, Sojourn == 0)) +
+  geom_line(aes(x = Cycle, y = N, colour = Stage)) +
+  facet_wrap(vars(State))
 ```
 
 # Costs
@@ -916,7 +1009,7 @@ m_cost_adjuvant
 
 -   Bring the per person cost here, multiply trace for total cost at each cycle, for each stage. Multiply by portion of patients in treatment strategy and portion of patients who receive drug.
 
--   Often have to add costs, not reassign the existing matrix value...
+-   Often have to add costs to existing costs, not reassign the existing matrix value...
 
 ```{r}
 a_costs <- array(data = 0, 
@@ -968,7 +1061,7 @@ a_costs[, , "5"] |>
 a_costs[1:2, , 1:2, drop = FALSE]
 ```
 
--   See above: slight discrepancy for Carboplatin cost for Stage IV for cycles 1, 2 (and maybe more). Can't see why... Bevacizumab is fine.
+-   **See above**: large discrepancy for Carboplatin cost for Stage IV for cycles 1, 2 (and maybe more). Can't see why... Bevacizumab is fine.
 
 
 ### Post-Progression CT (Subsequent Lines)
@@ -977,18 +1070,54 @@ a_costs[1:2, , 1:2, drop = FALSE]
 
 -   Median OS is never more than 1.3 years greater than median PFS - not much time to get through another 6 lines of treatment, at least in half of cases.
 
+-   **Solution**: use sojourn to choose when to assign cost of CT.
+
+-   **Question**: reasonable to terminate first-line CT due to progression and immediately implement second-line CT?
+
+-   Can I track how many receive CT? Particularly, track completion rates of each line.
+
 ```{r}
 df_drug_use |> 
   select(-c(contains("line1")))
 
+# patients who progressed in first cycle get 2nd line treatment
 
-a_costs[, , 2] <- a_costs[, , 2] +
+# a_costs[, , 2] <- a_costs[, , 2] +
   m_costed_drugs * 
   m_drug_use[, "line2"] %*% 
   t(rowSums(a_trace_semi["Progressed", , 2, ], na.rm = TRUE))
-a_costs[, , 2]
+
+a_costs[, , 1:6]
 ```
 
+```{r}
+# more generally, for sojourn = 0:5 in Prog receives 2nd line, regardless of cycle
+# but I need to track cycle for discounting etc.
+
+fn_prog_lines <- function(line, cycle, sojourn){
+  m_costed_drugs *
+    m_drug_use[, line] %*% 
+    t(a_trace_semi["Progressed", , cycle, sojourn])
+}
+
+fn_add_cost <- function(line, cycle, sojourn) {
+  a_costs[, , cycle] <<- 
+    a_costs[, , cycle] +
+    fn_prog_lines(line = line, cycle = cycle, sojourn = sojourn)
+}
+
+
+for (cycle in dimnames(a_costs)[["cycle"]]) {
+  for (sojourn in 1:6) {
+    if (sojourn <= as.integer(cycle)) {
+      fn_add_cost("line2", cycle, sojourn) 
+    }
+  }
+}
+rm(cycle, sojourn)
+
+# Wait 12 months for 
+```
 
 ### Palliative drugs
 
