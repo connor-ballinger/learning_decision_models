@@ -606,7 +606,7 @@ df_trace_semi <- as.data.frame(aperm(a_trace_semi)) |>
                         ordered = TRUE))
 ```
 
--   Can replicate results for standard Markov.
+-   Can replicate results for standard Markov:
 
 ```{r}
 a_trace_semi_norm <- a_trace_semi
@@ -641,14 +641,21 @@ colSums(a_trace_semi_norm[c("Stable", "Progressed"), , , ], na.rm = TRUE) |>
 
 ### Analyse Sojourn Time
 
-
+-   Not sure. Maybe it doesn't differ at all from the metrics for cycles because this isn't a true semi-Markov. Not the case for Prog state.
 
 ```{r}
-rowSums(a_trace_semi_norm[, , , ], na.rm = TRUE, dims = 3)
 
-a_trace_semi_norm["Stable", , , ] |> 
-  aperm(c("stage", "sojourn", "cycle")) |> 
-  rowSums(na.rm = TRUE, dims = 1) * n_cycle_length
+a_trace_semi_norm[c("Progressed"), , , , drop = FALSE] |> 
+  aperm(c("state", "stage", "sojourn", "cycle")) |> 
+  rowSums(na.rm = TRUE, dims = 2) * 
+  n_cycle_length
+
+
+a_trace_semi_norm[c("Progressed"), , , , drop = FALSE] |> 
+  aperm(c("state", "stage", "sojourn", "cycle")) |> 
+  rowSums(na.rm = TRUE, dims = 2) * 
+  1 / n_cycles
+
 ```
 
 ```{r}
@@ -1161,7 +1168,8 @@ for (cycle in dimnames(a_costs)[["cycle"]]) {
 }
 rm(cycle, sojourn)
 
-# Wait 12 months for 
+# How long before patients receive 3rd line of treatment? First, need to
+# understand how long they stay in Prog state.
 ```
 
 ### Palliative drugs
