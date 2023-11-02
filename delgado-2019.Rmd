@@ -21,7 +21,7 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 # To do
 
--   **23/10 Try incorporating subsequent lines of treatment by tracking length of time in progressed state. Will have to use some kind of blanket rule - every x months, all patients in progressed state receive next treatment.** Using exhaustive tunnel states for Progressed state resulted in a probability array which was more than 20 times the size (w.r.t. memory) of the sojourn array.
+-   **23/10 Try incorporating subsequent lines of treatment by tracking length of time in progressed state. Will have to use some kind of blanket rule - every x months, all patients in progressed state receive next treatment.** 
 
 -   **16/10 Don't think I can go any further - see questions below.**
 
@@ -30,6 +30,20 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 -   Fix notes on Heintz survival extrapolation.
 
 -   Analysis of sojourn time.
+
+# Notes
+
+-   Appears you can't use arithmetic and pipe the result. Perform arithmetic and assign to object, then perform other functions in pipe chain.
+
+    -   e.g. 1.5 + 1 |> round() = 2.5 but 1 + 1.5 |> round() = 3, since 1.5 gets rounded to 2.
+    -   See [here](https://stackoverflow.com/questions/72352994/different-outputs-with-pipe-after-arithmetic-operator-vs-calling-it-directly):  the pipe precedes arithmetic functions in order of operations.
+<br><br>
+
+-   **See Hawkins 2005**: semi-Markov relies on a 3-D transition matrix (from state, to state, t) where t is time spent in current state. I think this is necessary, don't believe my current transition array captures this, right?? I know what portion transitions in and out each cycle... Imagine after 10 cycles - people have been in there for 0-9 cycles... I think I need more structure to track this...
+
+-   Use `drop = FALSE` when printing arrays for more explicit labelling.
+
+-   Using exhaustive tunnel states for Progressed state resulted in a probability array which was more than 20 times the size (w.r.t. memory) of the sojourn array.
 
 # Questions
 
@@ -66,18 +80,6 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 # Assumptions
 
 -   Neoadjuvant CT and all surgical treatment is administered in the first cycle, essentially as start-up costs.
-
-# Aside
-
--   Appears you can't use arithmetic and pipe the result. Perform arithmetic and assign to object, then perform other functions in pipe chain.
-
-    -   e.g. 1.5 + 1 |> round() = 2.5 but 1 + 1.5 |> round() = 3, since 1.5 gets rounded to 2.
-    -   See [here](https://stackoverflow.com/questions/72352994/different-outputs-with-pipe-after-arithmetic-operator-vs-calling-it-directly):  the pipe precedes arithmetic functions in order of operations.
-<br><br>
-
--   **See Hawkins 2005**: semi-Markov relies on a 3-D transition matrix (from state, to state, t) where t is time spent in current state. I think this is necessary, don't believe my current transition array captures this, right?? I know what portion transitions in and out each cycle... Imagine after 10 cycles - people have been in there for 0-9 cycles... I think I need more structure to track this...
-
--   Use `drop = FALSE` when printing arrays for more explicit labelling.
 
 # DARTH Framework (Alarid 2023)
 
@@ -540,6 +542,10 @@ ggplot(data = df_trace_normalised) +
 
 ```
 
+### Survival Outcomes
+
+-   Is this mean PFS and mean OS? If so, it would be making an error on censoring - not sure how to manage that manually...
+
 ```{r}
 a_trace_norm <- a_trace
 
@@ -552,7 +558,16 @@ rowSums(a_trace_norm["Stable", , ]) * n_cycle_length
 colSums(a_trace_norm[c("Stable", "Progressed"), , ]) |> 
   rowSums() *
   n_cycle_length
+```
 
+-   Is this the portion of time in PFS and OS? Does censoring need to be accounted for?
+
+```{r}
+rowSums(a_trace_norm["Stable", , ]) * 1 / n_cycles
+
+colSums(a_trace_norm[c("Stable", "Progressed"), , ]) |> 
+  rowSums() *
+  1 / n_cycles
 ```
 
 ## OS and PFS
@@ -591,23 +606,67 @@ df_trace_semi <- as.data.frame(aperm(a_trace_semi)) |>
                         ordered = TRUE))
 ```
 
+-   Can replicate results for standard Markov.
+
+```{r}
+a_trace_semi_norm <- a_trace_semi
+
+for (cycle in dimnames(a_trace_semi_norm)[["cycle"]]) {
+  for (sojourn in dimnames(a_trace_semi_norm)[["sojourn"]]) {
+    
+    a_trace_semi_norm[, , cycle, sojourn] <- 
+      a_trace_semi_norm[, , cycle, sojourn] %*%
+      diag(1 / v_init_stages)
+    
+  }
+}
+
+rowSums(a_trace_semi_norm["Stable", , , ], na.rm = TRUE, dims = 1) *
+  n_cycle_length
+
+colSums(a_trace_semi_norm[c("Stable", "Progressed"), , , ], na.rm = TRUE) |> 
+  rowSums(na.rm = TRUE, dims = 1) * 
+  n_cycle_length
+
+```
+
+```{r}
+rowSums(a_trace_semi_norm["Stable", , , ], na.rm = TRUE, dims = 1) * 
+  1 / n_cycles
+
+colSums(a_trace_semi_norm[c("Stable", "Progressed"), , , ], na.rm = TRUE) |> 
+  rowSums(na.rm = TRUE, dims = 1) * 
+  1 / n_cycles
+```
+
+### Analyse Sojourn Time
+
+
+
+```{r}
+rowSums(a_trace_semi_norm[, , , ], na.rm = TRUE, dims = 3)
+
+a_trace_semi_norm["Stable", , , ] |> 
+  aperm(c("stage", "sojourn", "cycle")) |> 
+  rowSums(na.rm = TRUE, dims = 1) * n_cycle_length
+```
+
 ```{r}
 # what's this?
-# df_trace_semi |> 
-#   filter(State == "Progressed") |> 
-#   mutate(Volume = Sojourn * N) |> 
-#   summarise(Sum = sum(Volume), .by = Stage) |> 
+# df_trace_semi |>
+#   filter(State == "Progressed") |>
+#   mutate(Volume = Sojourn * N) |>
+#   summarise(Sum = sum(Volume), .by = Stage) |>
 #   mutate(Dead = rowSums(a_trace_semi["Dead", , "173", ], na.rm = TRUE),
 #          Ave = Sum / Dead)
 
 
-df_trace_semi |> 
-  filter(State == "Progressed") |> 
-  summarise(mean = round(mean(Sojourn)), q = list(quantile(Sojourn)), .by = Stage) |> 
-  unnest_wider(col = q)
+# df_trace_semi |> 
+#   filter(State == "Progressed") |> 
+#   summarise(mean = round(mean(Sojourn)), q = list(quantile(Sojourn)), .by = Stage) |> 
+#   unnest_wider(col = q)
 
 ```
-
 
 ```{r}
 ggplot(data = filter(df_trace_semi, Sojourn == Cycle)) +
@@ -1075,20 +1134,6 @@ a_costs[1:2, , 1:2, drop = FALSE]
 -   **Question**: reasonable to terminate first-line CT due to progression and immediately implement second-line CT?
 
 -   Can I track how many receive CT? Particularly, track completion rates of each line.
-
-```{r}
-df_drug_use |> 
-  select(-c(contains("line1")))
-
-# patients who progressed in first cycle get 2nd line treatment
-
-# a_costs[, , 2] <- a_costs[, , 2] +
-  m_costed_drugs * 
-  m_drug_use[, "line2"] %*% 
-  t(rowSums(a_trace_semi["Progressed", , 2, ], na.rm = TRUE))
-
-a_costs[, , 1:6]
-```
 
 ```{r}
 # more generally, for sojourn = 0:5 in Prog receives 2nd line, regardless of cycle
