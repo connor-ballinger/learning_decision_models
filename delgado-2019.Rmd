@@ -466,9 +466,10 @@ rm(stage, t)
 
 ## View Results
 
--   Descriptive stats:
-
 ```{r}
+
+# dataframe for plotting
+
 df_trace <- as.data.frame(aperm(a_trace)) |>
   mutate(Cycle = 0:n_cycles) |> 
   pivot_longer(cols = -(Cycle), 
@@ -479,35 +480,6 @@ df_trace <- as.data.frame(aperm(a_trace)) |>
          State = factor(State, 
                         levels = c("Stable", "Progressed", "Dead"), 
                         ordered = TRUE))
-
-fn_alive <- function(df, states_existing, state_new, keep = TRUE) {
-  
-  if (keep) {
-    
-    df |> 
-      mutate(State_2 = case_when(State %in% states_existing ~ state_new,
-                                 .default = NA)) |> 
-      pivot_longer(cols = contains("State"), values_to = "State") |> 
-      select(-c(name)) |> 
-      reframe(Portion = sum(Portion, na.rm = TRUE), .by = c(Cycle, Stage, State, Year)) |> 
-      drop_na(State) |> 
-      mutate(State = factor(State, c("Stable", "Progressed", state_new, "Dead"), ordered = TRUE)) |> 
-      arrange(Cycle, Stage, State)
-    
-  } else { 
-    
-    df |> 
-      mutate(
-        State = fct_recode(
-          State, 
-          set_names(states_existing, rep(state_new, length(states_existing)))
-        )
-      ) |> 
-      reframe(Portion = sum(Portion, na.rm = TRUE), 
-              .by = c(Cycle, Stage, State, Year))
-    
-  }
-}
 ```
 
 ```{r}
@@ -520,7 +492,7 @@ ggplot(data = df_trace) +
   facet_wrap(vars(Stage), nrow = 1)
 ```
 
--   Normalise Stages.
+-   Normalise Stages for more explicit comparison.
 
 ```{r}
 df_trace_normalised <- as.data.frame(aperm(a_trace)) |> 
@@ -545,6 +517,8 @@ ggplot(data = df_trace_normalised) +
 ### Survival Outcomes
 
 -   Is this mean PFS and mean OS? If so, it would be making an error on censoring - not sure how to manage that manually...
+
+    -Yes, mean PFS and OS, and aggregate share of time without experiencing an event. I don't have to worry about censoring so long as results are reported for 10-year period, which aligns with Delgado (i.e. I have restricted mean survival time).
 
 ```{r}
 a_trace_norm <- a_trace
@@ -573,6 +547,37 @@ colSums(a_trace_norm[c("Stable", "Progressed"), , ]) |>
 ## OS and PFS
 
 ```{r}
+
+# function to retrieve PFS and OS info by combining S and P into Alive
+fn_alive <- function(df, states_existing, state_new, keep = TRUE) {
+  
+  if (keep) {
+    
+    df |> 
+      mutate(State_2 = case_when(State %in% states_existing ~ state_new,
+                                 .default = NA)) |> 
+      pivot_longer(cols = contains("State"), values_to = "State") |> 
+      select(-c(name)) |> 
+      reframe(Portion = sum(Portion, na.rm = TRUE), .by = c(Cycle, Stage, State, Year)) |> 
+      drop_na(State) |> 
+      mutate(State = factor(State, c("Stable", "Progressed", state_new, "Dead"), ordered = TRUE)) |> 
+      arrange(Cycle, Stage, State)
+    
+  } else { 
+    
+    df |> 
+      mutate(
+        State = fct_recode(
+          State, 
+          set_names(states_existing, rep(state_new, length(states_existing)))
+        )
+      ) |> 
+      reframe(Portion = sum(Portion, na.rm = TRUE), 
+              .by = c(Cycle, Stage, State, Year))
+    
+  }
+}
+
 df_graph <- df_trace_normalised |> 
   fn_alive(c("Stable", "Progressed"), "Alive")
 
@@ -641,7 +646,9 @@ colSums(a_trace_semi_norm[c("Stable", "Progressed"), , , ], na.rm = TRUE) |>
 
 ### Analyse Sojourn Time
 
--   Not sure. Maybe it doesn't differ at all from the metrics for cycles because this isn't a true semi-Markov. Not the case for Prog state.
+-   Not sure. Maybe it doesn't differ at all from the metrics for cycles because this isn't a true semi-Markov. 
+
+    -   Note: Not the case for Prog state, which is what I'm interested in. Time in Stable can be analysed from standard Markov.
 
 ```{r}
 
@@ -658,20 +665,111 @@ a_trace_semi_norm[c("Progressed"), , , , drop = FALSE] |>
 
 ```
 
+### Median Survival Time
+
 ```{r}
-# what's this?
-# df_trace_semi |>
-#   filter(State == "Progressed") |>
-#   mutate(Volume = Sojourn * N) |>
-#   summarise(Sum = sum(Volume), .by = Stage) |>
-#   mutate(Dead = rowSums(a_trace_semi["Dead", , "173", ], na.rm = TRUE),
-#          Ave = Sum / Dead)
+# find the cycle where the value is 0.5
+v_names_stages |> 
+  set_names() |> 
+  map(\(x) 
+      unname(
+        which.min(
+          abs(
+            rowSums(
+              a_trace_semi_norm["Stable", x, , ],
+              na.rm = TRUE
+            ) - 0.5
+          )
+        )
+      ) 
+  )
 
+v_names_stages |> 
+  set_names() |> 
+  map(\(x) 
+      unname(
+        which(
+          round(
+            rowSums(
+              colSums(
+                a_trace_semi_norm[c("Stable", "Progressed"), x, , ],
+                na.rm = TRUE
+              ),
+              na.rm = TRUE
+            ),
+            2
+          )
+          == 0.5
+        )
+      ) 
+  )
 
-# df_trace_semi |> 
-#   filter(State == "Progressed") |> 
-#   summarise(mean = round(mean(Sojourn)), q = list(quantile(Sojourn)), .by = Stage) |> 
-#   unnest_wider(col = q)
+v_names_stages |> 
+  set_names() |> 
+  map(\(x) 
+      unname(
+        which(
+          round(
+            rowSums(
+              a_trace_semi_norm["Dead", x, , ],
+              na.rm = TRUE
+            ),
+            2
+          )
+          == 0.5
+        )
+      ) 
+  )
+
+```
+
+### Median Sojourn
+
+-   Conditional on dying?
+
+```{r}
+v_dead_portion <- rowSums(a_trace_semi_norm["Dead", , n_cycles + 1, ], na.rm = TRUE)
+
+v_names_stages |> 
+  set_names() |> 
+  map(\(x) 
+      names(
+        which.min(
+          abs(
+            colSums( # Adding cycles together
+              a_trace_semi_norm["Progressed", x, , ],
+              na.rm = TRUE
+            ) - (v_dead_portion[[x]] / 2) # half of all who died
+          )
+        )
+      ) 
+  )
+#colSums(a_trace_semi_norm["Progressed", "IV", , ], na.rm = TRUE)
+```
+
+```{r}
+# function to calculate survival / sojourn time for a particular quantile
+
+fn_calc_time <- function(array, state, type, denom, quantile) {
+  v_names_stages |> 
+    set_names() |> 
+    map(\(x) names(
+        which.min(
+          abs(
+            apply(
+              X = array[state, x, , ],
+              MARGIN = type,
+              FUN = sum,
+              na.rm = TRUE
+            ) - denom[[x]] * (1 - quantile)
+          )
+        )
+      ) 
+    )
+} 
+
+fn_calc_time(a_trace_semi_norm, "Progressed", "sojourn", v_dead_portion, 0.99)
+
 
 ```
 
