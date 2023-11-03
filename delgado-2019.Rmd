@@ -753,22 +753,29 @@ v_names_stages |>
 fn_calc_time <- function(array, state, type, denom, quantile) {
   v_names_stages |> 
     set_names() |> 
-    map(\(x) names(
-        which.min(
-          abs(
-            apply(
-              X = array[state, x, , ],
-              MARGIN = type,
-              FUN = sum,
-              na.rm = TRUE
-            ) - denom[[x]] * (1 - quantile)
-          )
+    map_chr(\(x) names(
+      which.min(
+        abs(
+          apply(
+            X = array[state, x, , ],
+            MARGIN = type,
+            FUN = sum,
+            na.rm = TRUE
+          ) 
+          - denom[[x]] * (1 - quantile)
         )
-      ) 
+      )
+    ) 
     )
 } 
 
-fn_calc_time(a_trace_semi_norm, "Progressed", "sojourn", v_dead_portion, 0.99)
+# In which cycle was the given quantile reached for sojourn in Progressed state.
+c(0, 0.01, 0.1, 0.5, 0.9, 0.99, 1) |> 
+  set_names() |> 
+  map(\(x) fn_calc_time(a_trace_semi_norm, "Progressed", "sojourn", v_dead_portion, x)) |> 
+  list_transpose() |> 
+  as.data.frame.list() |> 
+  rownames_to_column(var = "Quantile")
 
 
 ```
