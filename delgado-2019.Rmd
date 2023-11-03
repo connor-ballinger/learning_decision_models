@@ -340,6 +340,7 @@ a_prob_semi[, , "I", 1:3, 1:3, drop = FALSE] |>
 ```{r}
 v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
 names(v_init_stages) <- v_names_stages
+v_init_stages_norm <- v_init_stages * 1 / v_init_stages
 v_init_states <- c(1, 0, 0) # all patients start in stable state
 
 
@@ -608,7 +609,8 @@ df_trace_semi <- as.data.frame(aperm(a_trace_semi)) |>
          Year = Cycle * n_cycle_length,
          State = factor(State, 
                         levels = c("Stable", "Progressed", "Dead"), 
-                        ordered = TRUE))
+                        ordered = TRUE)) |> 
+  filter(N != 0) # I think this is fine
 ```
 
 -   Can replicate results for standard Markov:
@@ -651,7 +653,6 @@ colSums(a_trace_semi_norm[c("Stable", "Progressed"), , , ], na.rm = TRUE) |>
     -   Note: Not the case for Prog state, which is what I'm interested in. Time in Stable can be analysed from standard Markov.
 
 ```{r}
-
 a_trace_semi_norm[c("Progressed"), , , , drop = FALSE] |> 
   aperm(c("state", "stage", "sojourn", "cycle")) |> 
   rowSums(na.rm = TRUE, dims = 2) * 
@@ -666,86 +667,6 @@ a_trace_semi_norm[c("Progressed"), , , , drop = FALSE] |>
 ```
 
 ### Median Survival Time
-
-```{r}
-# find the cycle where the value is 0.5
-v_names_stages |> 
-  set_names() |> 
-  map(\(x) 
-      unname(
-        which.min(
-          abs(
-            rowSums(
-              a_trace_semi_norm["Stable", x, , ],
-              na.rm = TRUE
-            ) - 0.5
-          )
-        )
-      ) 
-  )
-
-v_names_stages |> 
-  set_names() |> 
-  map(\(x) 
-      unname(
-        which(
-          round(
-            rowSums(
-              colSums(
-                a_trace_semi_norm[c("Stable", "Progressed"), x, , ],
-                na.rm = TRUE
-              ),
-              na.rm = TRUE
-            ),
-            2
-          )
-          == 0.5
-        )
-      ) 
-  )
-
-v_names_stages |> 
-  set_names() |> 
-  map(\(x) 
-      unname(
-        which(
-          round(
-            rowSums(
-              a_trace_semi_norm["Dead", x, , ],
-              na.rm = TRUE
-            ),
-            2
-          )
-          == 0.5
-        )
-      ) 
-  )
-
-```
-
-### Median Sojourn
-
--   Conditional on dying?
-
-```{r}
-v_dead_portion <- rowSums(a_trace_semi_norm["Dead", , n_cycles + 1, ], na.rm = TRUE)
-
-v_names_stages |> 
-  set_names() |> 
-  map(\(x) 
-      names(
-        which.min(
-          abs(
-            colSums( # Adding cycles together
-              a_trace_semi_norm["Progressed", x, , ],
-              na.rm = TRUE
-            ) - (v_dead_portion[[x]] / 2) # half of all who died
-          )
-        )
-      ) 
-  )
-#colSums(a_trace_semi_norm["Progressed", "IV", , ], na.rm = TRUE)
-```
 
 ```{r}
 # function to calculate survival / sojourn time for a particular quantile
@@ -769,6 +690,20 @@ fn_calc_time <- function(array, state, type, denom, quantile) {
     )
 } 
 
+
+fn_calc_time(a_trace_semi_norm, "Stable", "cycle", v_init_stages_norm, 0.5)
+
+fn_calc_time(a_trace_semi_norm, "Dead", "cycle", v_init_stages_norm, 0.5)
+
+```
+
+### Sojourn Distribution
+
+-   Conditional on dying? Yes...
+
+```{r}
+v_dead_portion <- rowSums(a_trace_semi_norm["Dead", , n_cycles + 1, ], na.rm = TRUE)
+
 # In which cycle was the given quantile reached for sojourn in Progressed state.
 c(0, 0.01, 0.1, 0.5, 0.9, 0.99, 1) |> 
   set_names() |> 
@@ -777,17 +712,37 @@ c(0, 0.01, 0.1, 0.5, 0.9, 0.99, 1) |>
   as.data.frame.list() |> 
   rownames_to_column(var = "Quantile")
 
+```
+
+-   Cumulative distribution along sojourn at the last cycle.
+
+```{r}
+df_trace_semi_norm <- as.data.frame(aperm(a_trace_semi_norm)) |> 
+  mutate(Sojourn = 0:n_cycles) |> 
+  pivot_longer(cols = -(Sojourn), 
+               names_to = c("Cycle", "Stage", "State"),
+               names_sep = "\\.", 
+               values_drop_na = TRUE,
+               values_to = "Portion") |> 
+  mutate(Cycle = as.integer(Cycle),
+         Year = Cycle * n_cycle_length,
+         State = factor(State, 
+                        levels = c("Stable", "Progressed", "Dead"), 
+                        ordered = TRUE)) |> 
+  filter(Portion != 0) |> 
+  mutate(CumulativeSojourn = cumsum(Portion), .by = c(State, Stage, Cycle))
+
+
+ggplot(data = filter(df_trace_semi_norm, Cycle == 173, State != "Stable"),
+       aes(x = Sojourn, y = CumulativeSojourn, colour = Stage)) +
+  geom_line() +
+  facet_wrap(vars(State))
 
 ```
 
 ```{r}
-ggplot(data = filter(df_trace_semi, Sojourn == Cycle)) +
-  geom_line(aes(x = Cycle, y = N, colour = Stage)) +
-  facet_wrap(vars(State))
-
-
-ggplot(data = filter(df_trace_semi, Cycle > 0, Sojourn == 0)) +
-  geom_line(aes(x = Cycle, y = N, colour = Stage)) +
+ggplot(data = filter(df_trace_semi_norm, Cycle > 0, Sojourn == 0)) +
+  geom_line(aes(x = Cycle, y = Portion, colour = Stage)) +
   facet_wrap(vars(State))
 ```
 
@@ -1247,11 +1202,14 @@ a_costs[1:2, , 1:2, drop = FALSE]
 
 -   Can I track how many receive CT? Particularly, track completion rates of each line.
 
+    -   99% of IV have sojourn time less than 35, 90% under 18 cycles. Just do all lines back-to-back.
+
 ```{r}
-# more generally, for sojourn = 0:5 in Prog receives 2nd line, regardless of cycle
-# but I need to track cycle for discounting etc.
+# more generally, for sojourn = 0:5 in Prog receives 2nd line, regardless of
+# cycle but I need to track cycle for discounting etc.
 
 fn_prog_lines <- function(line, cycle, sojourn){
+  line = paste0("line", line)
   m_costed_drugs *
     m_drug_use[, line] %*% 
     t(a_trace_semi["Progressed", , cycle, sojourn])
@@ -1263,19 +1221,23 @@ fn_add_cost <- function(line, cycle, sojourn) {
     fn_prog_lines(line = line, cycle = cycle, sojourn = sojourn)
 }
 
-
-for (cycle in dimnames(a_costs)[["cycle"]]) {
-  for (sojourn in 1:6) {
-    if (sojourn <= as.integer(cycle)) {
-      fn_add_cost("line2", cycle, sojourn) 
+fn_all_lines_cost <- function(line) {
+  lower = ((line - 2) * 6) + 1
+  upper = lower + 6
+  for (cycle in dimnames(a_costs)[["cycle"]]) {
+    for (sojourn in lower:upper) {
+      if (sojourn <= as.integer(cycle)) {
+        fn_add_cost(line, cycle, sojourn) 
+      }
     }
   }
 }
-rm(cycle, sojourn)
 
-# How long before patients receive 3rd line of treatment? First, need to
-# understand how long they stay in Prog state.
+2:7 |> 
+  walk(\(x) fn_all_lines_cost(x))
 ```
+
+
 
 ### Palliative drugs
 
