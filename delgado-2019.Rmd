@@ -31,6 +31,8 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 -   Analysis of sojourn time.
 
+-   **Currency conversion from Euros.**
+
 # Notes
 
 -   Appears you can't use arithmetic and pipe the result. Perform arithmetic and assign to object, then perform other functions in pipe chain.
@@ -841,6 +843,7 @@ df_service_costs <- df_service_costs |>
   drop_na(cost) |> 
   mutate(service = make_clean_names(service),
          cost = as.double(cost))
+df_service_costs[df_service_costs$service == "day_hospital_price_per_minute",]$cost <- 0.32
 df_service_costs
 
 v_cost_services <- deframe(df_service_costs)
@@ -893,6 +896,13 @@ rownames(m_episode_cost) <- gsub("\\_n", "", rownames(m_episode_cost))
 conr::round_sensibly(m_episode_cost)
 
 ```
+
+## Extra Services
+
+```{r}
+df_service_costs
+```
+
 
 ## Drugs
 
@@ -1157,14 +1167,16 @@ a_costs <- array(data = 0,
 
 a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), "0"] <- 
   a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), "0"] +
-  (m_cost_neo_pp %*% diag(a_trace_semi["Stable", colnames(m_cost_neo_pp), "0", "0"])) * 3
+  (m_cost_neo_pp %*% 
+     diag(a_trace_semi["Stable", colnames(m_cost_neo_pp), "0", "0"])) * 3
 
 ## what about three cycles post-surgery? Assume they need to be in Stable.
 
 1:3 |> 
   walk(\(x) a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), x] <<- 
          a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), x] +
-         m_cost_neo_pp %*% diag(rowSums(a_trace_semi["Stable", colnames(m_cost_neo_pp), x, ], na.rm = TRUE))
+         m_cost_neo_pp %*% 
+         diag(rowSums(a_trace_semi["Stable", colnames(m_cost_neo_pp), x, ], na.rm = TRUE))
   )
 
 # Adjuvant
@@ -1174,7 +1186,8 @@ a_costs[rownames(m_cost_neo_pp), colnames(m_cost_neo_pp), "0"] <-
 1:6 |> 
   walk(\(x) a_costs[, , x] <<- 
          a_costs[, , x] +
-         m_cost_adjuvant %*% diag(rowSums(a_trace_semi["Stable", , x, ], na.rm = TRUE))
+         m_cost_adjuvant %*% 
+         diag(rowSums(a_trace_semi["Stable", , x, ], na.rm = TRUE))
   )
 
 a_costs[, , "5"] |> 
@@ -1233,11 +1246,9 @@ fn_all_lines_cost <- function(line) {
   }
 }
 
-2:7 |> 
+2:7 |> # lines of therapy, for all stages, cycles
   walk(\(x) fn_all_lines_cost(x))
 ```
-
-
 
 ### Palliative drugs
 
@@ -1251,7 +1262,42 @@ df_drug_pall <- df_drug_pall |>
          use_post_terminal = use_of_drugs_4,
          daily_dose_post_terminal = daily_dose_mg_m_l_5)
 df_drug_pall
+
+df_drug_costs |> filter(drug %in% df_drug_pall$drug)
+
+
 ```
+
+-   Palliative care is given to the patients in their last 48 days of life.
+
+-   Up to 93.3% of the patients receive follow-up care at outpatient hospitals, while the remaining (6.7%) are assisted by palliative home care team.
+
+-   Patients need a mean of 9.5 home visits of palliative-care services
+
+-   those who receive follow-up at the outpatient hospital are seen by a nurse. 
+
+-   In both cases, patients also pay four visits, on average, to the primary-care doctor 
+
+-   they spent their terminal phase of their illness at home (59.6%) or at the hospital (40.4%).
+
+-   The last 3 days of this terminal phase, patients stay at home, and they are visited twice a day by a nurse. 
+
+-   Of these, 14% receive sedation.
+
+```{r}
+df_service_costs |> 
+  filter(service %in% c("primary_care_home_care",
+                        "nursing_care_home_care",
+                        "palliative_care_hospitalization",
+                        "palliative_care_services_home_care",
+                        "home_care_price_per_hour")) |> 
+  mutate(portion = c())
+```
+
+
+
+
+### What are these drugs?
 
 ```{r}
 anti_join(df_drug_costs, df_drug_doses, by = "drug")
