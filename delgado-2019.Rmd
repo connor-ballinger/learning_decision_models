@@ -167,13 +167,16 @@ df_bgr_mort
 
 ### Transition Rates - Heintz 2006
 
--   Median 5-year PFS and OS were published by stage. Delgado extrapolated assuming an exponential distribution.
+-   5-year PFS and OS were published by stage - Figures 9 and 24. Delgado extrapolated assuming an exponential distribution.
 
--   **Change this - think they used portions published in Heintz, as opposed to t at median survival.**
+$$S(t) = e^{-\lambda t}$$
+
+-   Can solve for $\lambda$ when $S$ and $t$ are known (i.e. proportion event-free at five years).
+
+-   For example, if time to median survival was known:
 
 $$S(t_{med}) = \frac{1}{2}$$
 $$e^{-\lambda t_{med}} = \frac{1}{2}$$
-$$t_{med} = \frac{\ln(2)}{\lambda}$$
 
 $$\lambda = \frac{\ln(2)}{t_{med}}$$
 
@@ -267,8 +270,6 @@ v_names_stages |>
 
 a_prob[, ,c("I", "IV") , c(1, n_cycles + 1)] |> round(3)
 ```
-
-Only interested in amount of time in Progressed state - tunnel states might be best. Also, having both time- and state-dependence causes redundancy - e.g. cycle 0 still has dimensions for every single possibility for state-dependence.
 
 ```{r}
 a_prob_semi <- array(data = as.double(NA), 
