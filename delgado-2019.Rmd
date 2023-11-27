@@ -8,6 +8,7 @@ output: conr::format_html
 
 ```{r, warning=FALSE, message=FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE, comment = "")
+knitr::opts_knit$set(root.dir = here::here())
 
 library(tidyverse)
 library(readxl)
@@ -15,6 +16,7 @@ library(janitor)
 library(knitr)
 library(lpSolve)
 
+conr::knit_df()
 theme_set(theme_bw() + theme(legend.position = "bottom"))
 
 ```
@@ -26,8 +28,6 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
 -   **16/10 Don't think I can go any further - see questions below.**
 
 -   Add yearly cohort with pop growth. 
-
--   Fix notes on Heintz survival extrapolation.
 
 -   Analysis of sojourn time.
 
@@ -41,7 +41,7 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
     -   See [here](https://stackoverflow.com/questions/72352994/different-outputs-with-pipe-after-arithmetic-operator-vs-calling-it-directly):  the pipe precedes arithmetic functions in order of operations.
 <br><br>
 
--   **See Hawkins 2005**: semi-Markov relies on a 3-D transition matrix (from state, to state, t) where t is time spent in current state. I think this is necessary, don't believe my current transition array captures this, right?? I know what portion transitions in and out each cycle... Imagine after 10 cycles - people have been in there for 0-9 cycles... I think I need more structure to track this...
+-   See Hawkins 2005: semi-Markov relies on a 3-D transition matrix (from state, to state, t) where t is time spent in current state. 
 
 -   Use `drop = FALSE` when printing arrays for more explicit labelling.
 
@@ -55,11 +55,11 @@ theme_set(theme_bw() + theme(legend.position = "bottom"))
       
       -   Point remains, Delgado doesn't seem to have done this.
       
--   Survival: I thought they used median survival time from Heintz 2006, but only Stages III and IV observe median survival, so I'm not sure how they parameterise Stages I and II. Also, Heintz only presents for sub-stages, not the 4 usual stages, though perhaps Delgado aggregated the groups.
+-   When to implement rounding? Nonsensical for fractions of people in trace at each time point, but would equate to a lot of rounding errors.
 
-      -   Delgado did it in reverse. Did not have median PFS/OS for each stage, but does have portions at five years.
-      
--   When to implement rounding? Non-sensical for fractions of people in trace at each time point, but would equate to a lot of rounding errors.
+-   Bit unsure about censoring at times. 
+
+      -   Median is not affected by censoring - either the median person has experienced the event or they have been censored.
 
 # Overview
 
@@ -196,7 +196,7 @@ df_rates <- tibble(stage = v_names_stages,
 df_rates
 ```
 
-### All Rates to Probabilities
+### Convert Rates to Probabilities
 
 -   Convert rates to probabilities: $P = 1 - e^{-\lambda}$
 
@@ -271,6 +271,170 @@ v_names_stages |>
 a_prob[, ,c("I", "IV") , c(1, n_cycles + 1)] |> round(3)
 ```
 
+## Construct Trace
+
+```{r}
+v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
+# v_init_stages <- c(0.37, 0.06, 0.35, 0.22) # rough portions
+# v_init_stages <- rep.int(1, times = 4)
+names(v_init_stages) <- v_names_stages
+v_init_states <- c(1, 0, 0) # all patients start in stable state
+
+a_trace <- array(data = NA, 
+                 dim = c(3, 4, n_cycles+1), 
+                 dimnames = list("state" = v_names_states,
+                                 "stage" = v_names_stages,
+                                 "cycle" = 0:n_cycles))
+
+a_trace[, , "0"] <- v_init_states %o% v_init_stages
+
+
+for (stage in v_names_stages) {
+  for (t in 2:(n_cycles + 1)) { # indexing by integer, not cycle name. cycle_name = integer - 1.
+    a_trace[, stage, t] <- a_trace[, stage, t-1] %*% a_prob[, , stage, t]
+  }
+}
+
+a_trace[, , c(1, n_cycles + 1)] |> 
+  round()
+
+rm(stage, t)
+```
+
+## View Results
+
+```{r}
+# dataframe for plotting
+df_trace <- as.data.frame(aperm(a_trace)) |>
+  mutate(Cycle = 0:n_cycles) |> 
+  pivot_longer(cols = -(Cycle), 
+               names_to = c("Stage", "State"),
+               names_sep = "\\.",
+               values_to = "N") |> 
+  mutate(Year = Cycle * n_cycle_length,
+         State = factor(State, 
+                        levels = c("Stable", "Progressed", "Dead"), 
+                        ordered = TRUE))
+```
+
+-   Number of patients in each state over 10-year horizon, by FIGO stage.
+
+```{r}
+ggplot(data = df_trace) +
+  geom_line(aes(x = Year, y = N, colour = Stage)) +
+  facet_wrap(vars(State)) #, scales = "free_y")
+```
+
+```{r}
+ggplot(data = df_trace) +
+  geom_line(aes(x = Year, y = N, colour = State)) +
+  facet_wrap(vars(Stage), nrow = 1)
+```
+
+-   Normalise Stages for more explicit comparison.
+
+```{r}
+df_trace_normalised <- as.data.frame(aperm(a_trace)) |> 
+  mutate(Cycle = 0:n_cycles) |> 
+  pivot_longer(cols = -(Cycle), 
+               names_to = c("Stage", "State"),
+               names_sep = "\\.",
+               values_to = "Portion") |> 
+  mutate(Portion = Portion * 1 / v_init_stages,
+         Year = Cycle * n_cycle_length,
+         State = factor(State, 
+                        levels = c("Stable", "Progressed", "Dead"), 
+                        ordered = TRUE))
+  
+
+ggplot(data = df_trace_normalised) +
+  geom_line(aes(x = Year, y = Portion, colour = Stage)) + 
+  facet_wrap(vars(State))
+
+```
+
+### Survival Outcomes
+
+-   Mean PFS and OS, and aggregate share of time without experiencing an event. I don't have to worry about censoring so long as results are reported for 10-year period, which aligns with Delgado (i.e. I have restricted mean survival time).
+
+```{r}
+a_trace_norm <- a_trace
+
+for (cycle in dimnames(a_trace_norm)[["cycle"]]) {
+  a_trace_norm[, , cycle] <- a_trace_norm[, , cycle] %*% diag(1 / v_init_stages)
+}
+
+rowSums(a_trace_norm["Stable", , ]) * n_cycle_length
+
+colSums(a_trace_norm[c("Stable", "Progressed"), , ]) |> 
+  rowSums() *
+  n_cycle_length
+```
+
+-   Portion of time in PFS and OS.
+
+```{r}
+rowSums(a_trace_norm["Stable", , ]) * 1 / n_cycles
+
+colSums(a_trace_norm[c("Stable", "Progressed"), , ]) |> 
+  rowSums() *
+  1 / n_cycles
+```
+
+## OS and PFS
+
+-   Stable represents PFS and Alive represents OS.
+
+```{r}
+
+# function to retrieve PFS and OS info by combining S and P into Alive
+fn_alive <- function(df, states_existing, state_new, keep = TRUE) {
+  
+  if (keep) {
+    
+    df |> 
+      mutate(State_2 = case_when(State %in% states_existing ~ state_new,
+                                 .default = NA)) |> 
+      pivot_longer(cols = contains("State"), values_to = "State") |> 
+      select(-c(name)) |> 
+      reframe(Portion = sum(Portion, na.rm = TRUE), .by = c(Cycle, Stage, State, Year)) |> 
+      drop_na(State) |> 
+      mutate(State = factor(State, c("Stable", "Progressed", state_new, "Dead"), ordered = TRUE)) |> 
+      arrange(Cycle, Stage, State)
+    
+  } else { 
+    
+    df |> 
+      mutate(
+        State = fct_recode(
+          State, 
+          set_names(states_existing, rep(state_new, length(states_existing)))
+        )
+      ) |> 
+      reframe(Portion = sum(Portion, na.rm = TRUE), 
+              .by = c(Cycle, Stage, State, Year))
+    
+  }
+}
+
+df_graph <- df_trace_normalised |> 
+  fn_alive(c("Stable", "Progressed"), "Alive")
+
+ggplot(data = df_graph) +
+  geom_line(aes(x = Year, y = Portion, colour = Stage)) + 
+  facet_wrap(vars(State), ncol = 4)
+
+ggplot(data = filter(df_graph, State %in% c("Stable", "Alive"))) +
+  geom_line(aes(x = Year, y = Portion, colour = State)) + 
+  facet_wrap(vars(Stage), ncol = 4) +
+  labs(colour = "") +
+  scale_color_discrete(labels = c("Stable" = "PFS", "Alive" = "OS"))
+```
+
+# Semi-Markov
+
+## Transition Probabilities
+
 ```{r}
 a_prob_semi <- array(data = as.double(NA), 
                      dim = c(3, 3, 4, (n_cycles+1), (n_cycles + 1)), 
@@ -340,6 +504,8 @@ a_prob_semi[, , "I", 1:3, 1:3, drop = FALSE] |>
 
 ```
 
+## Trace
+
 ```{r}
 v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
 names(v_init_stages) <- v_names_stages
@@ -406,7 +572,7 @@ a_trace_semi[, "I", 1:3, 1:3, drop = FALSE] |>
   aperm(perm = c("state", "sojourn", "cycle", "stage"))
 ```
 
--   Tunnels approach is slow.
+-   Tunnels approach is a much slower alternative.
 
 ```{r}
 # v_names_tunnels <- c("Stable", paste0("Progressed_", 0:n_cycles), "Dead")
@@ -420,6 +586,8 @@ a_trace_semi[, "I", 1:3, 1:3, drop = FALSE] |>
 ```
 
 ## Checks
+
+-   Passed.
 
 ```{r}
 # No illegal probs
@@ -436,164 +604,6 @@ for (stage in v_names_stages) {
 }
 tracker # should be zero
 rm(stage, t, tracker)
-```
-
-## Construct Trace
-
-```{r}
-v_init_stages <- c(1155, 195, 1116, 681) # Delgado figures
-# v_init_stages <- c(0.37, 0.06, 0.35, 0.22) # rough portions
-# v_init_stages <- rep.int(1, times = 4)
-names(v_init_stages) <- v_names_stages
-v_init_states <- c(1, 0, 0) # all patients start in stable state
-
-a_trace <- array(data = NA, 
-                 dim = c(3, 4, n_cycles+1), 
-                 dimnames = list("state" = v_names_states,
-                                 "stage" = v_names_stages,
-                                 "cycle" = 0:n_cycles))
-
-a_trace[, , "0"] <- v_init_states %o% v_init_stages
-
-
-for (stage in v_names_stages) {
-  for (t in 2:(n_cycles + 1)) { # indexing by integer, not cycle name. cycle_name = integer - 1.
-    a_trace[, stage, t] <- a_trace[, stage, t-1] %*% a_prob[, , stage, t]
-  }
-}
-
-a_trace[, , c(1, n_cycles + 1)] |> 
-  round()
-
-rm(stage, t)
-```
-
-## View Results
-
-```{r}
-
-# dataframe for plotting
-
-df_trace <- as.data.frame(aperm(a_trace)) |>
-  mutate(Cycle = 0:n_cycles) |> 
-  pivot_longer(cols = -(Cycle), 
-               names_to = c("Stage", "State"),
-               names_sep = "\\.",
-               values_to = "N") |> 
-  mutate(Year = Cycle * n_cycle_length,
-         State = factor(State, 
-                        levels = c("Stable", "Progressed", "Dead"), 
-                        ordered = TRUE))
-```
-
-```{r}
-ggplot(data = df_trace) +
-  geom_line(aes(x = Year, y = N, colour = Stage)) +
-  facet_wrap(vars(State)) #, scales = "free_y")
-
-ggplot(data = df_trace) +
-  geom_line(aes(x = Year, y = N, colour = State)) +
-  facet_wrap(vars(Stage), nrow = 1)
-```
-
--   Normalise Stages for more explicit comparison.
-
-```{r}
-df_trace_normalised <- as.data.frame(aperm(a_trace)) |> 
-  mutate(Cycle = 0:n_cycles) |> 
-  pivot_longer(cols = -(Cycle), 
-               names_to = c("Stage", "State"),
-               names_sep = "\\.",
-               values_to = "Portion") |> 
-  mutate(Portion = Portion * 1 / v_init_stages,
-         Year = Cycle * n_cycle_length,
-         State = factor(State, 
-                        levels = c("Stable", "Progressed", "Dead"), 
-                        ordered = TRUE))
-  
-
-ggplot(data = df_trace_normalised) +
-  geom_line(aes(x = Year, y = Portion, colour = Stage)) + 
-  facet_wrap(vars(State))
-
-```
-
-### Survival Outcomes
-
--   Is this mean PFS and mean OS? If so, it would be making an error on censoring - not sure how to manage that manually...
-
-    -Yes, mean PFS and OS, and aggregate share of time without experiencing an event. I don't have to worry about censoring so long as results are reported for 10-year period, which aligns with Delgado (i.e. I have restricted mean survival time).
-
-```{r}
-a_trace_norm <- a_trace
-
-for (cycle in dimnames(a_trace_norm)[["cycle"]]) {
-  a_trace_norm[, , cycle] <- a_trace_norm[, , cycle] %*% diag(1 / v_init_stages)
-}
-
-rowSums(a_trace_norm["Stable", , ]) * n_cycle_length
-
-colSums(a_trace_norm[c("Stable", "Progressed"), , ]) |> 
-  rowSums() *
-  n_cycle_length
-```
-
--   Is this the portion of time in PFS and OS? Does censoring need to be accounted for?
-
-```{r}
-rowSums(a_trace_norm["Stable", , ]) * 1 / n_cycles
-
-colSums(a_trace_norm[c("Stable", "Progressed"), , ]) |> 
-  rowSums() *
-  1 / n_cycles
-```
-
-## OS and PFS
-
-```{r}
-
-# function to retrieve PFS and OS info by combining S and P into Alive
-fn_alive <- function(df, states_existing, state_new, keep = TRUE) {
-  
-  if (keep) {
-    
-    df |> 
-      mutate(State_2 = case_when(State %in% states_existing ~ state_new,
-                                 .default = NA)) |> 
-      pivot_longer(cols = contains("State"), values_to = "State") |> 
-      select(-c(name)) |> 
-      reframe(Portion = sum(Portion, na.rm = TRUE), .by = c(Cycle, Stage, State, Year)) |> 
-      drop_na(State) |> 
-      mutate(State = factor(State, c("Stable", "Progressed", state_new, "Dead"), ordered = TRUE)) |> 
-      arrange(Cycle, Stage, State)
-    
-  } else { 
-    
-    df |> 
-      mutate(
-        State = fct_recode(
-          State, 
-          set_names(states_existing, rep(state_new, length(states_existing)))
-        )
-      ) |> 
-      reframe(Portion = sum(Portion, na.rm = TRUE), 
-              .by = c(Cycle, Stage, State, Year))
-    
-  }
-}
-
-df_graph <- df_trace_normalised |> 
-  fn_alive(c("Stable", "Progressed"), "Alive")
-
-ggplot(data = df_graph) +
-  geom_line(aes(x = Year, y = Portion, colour = Stage)) + 
-  facet_wrap(vars(State), ncol = 4)
-
-ggplot(data = filter(df_graph, State %in% c("Stable", "Alive"))) +
-  geom_line(aes(x = Year, y = Portion, colour = State)) + 
-  facet_wrap(vars(Stage), ncol = 4) +
-  labs(colour = "") +
-  scale_color_discrete(labels = c("Stable" = "PFS", "Alive" = "OS"))
 ```
 
 ## Inspect Semi-Markov
@@ -651,9 +661,7 @@ colSums(a_trace_semi_norm[c("Stable", "Progressed"), , , ], na.rm = TRUE) |>
 
 ### Analyse Sojourn Time
 
--   Not sure. Maybe it doesn't differ at all from the metrics for cycles because this isn't a true semi-Markov. 
-
-    -   Note: Not the case for Prog state, which is what I'm interested in. Time in Stable can be analysed from standard Markov.
+-   Aggregate time in Progressed state followed by proportion of time in Progressed state.
 
 ```{r}
 a_trace_semi_norm[c("Progressed"), , , , drop = FALSE] |> 
@@ -670,6 +678,8 @@ a_trace_semi_norm[c("Progressed"), , , , drop = FALSE] |>
 ```
 
 ### Median Survival Time
+
+-   Stage I does not reach median for OS or PFS.
 
 ```{r}
 # function to calculate survival / sojourn time for a particular quantile
@@ -691,18 +701,25 @@ fn_calc_time <- function(array, state, type, denom, quantile) {
       )
     ) 
     )
-} 
+}
+```
 
+-   For standard Markov, time until median proportion is reached in Stable and Dead states (median in Progressed is never reached as state membership is temporary). 
 
+    -   Censoring has not been accounted for here (right?).
+
+```{r}
 fn_calc_time(a_trace_semi_norm, "Stable", "cycle", v_init_stages_norm, 0.5)
 
 fn_calc_time(a_trace_semi_norm, "Dead", "cycle", v_init_stages_norm, 0.5)
 
 ```
 
-### Sojourn Distribution
+### Sojourn Distribution in Progressed State
 
--   Conditional on dying? Yes...
+-   Conditional on dying? Yes, which accounts for censoring.
+
+-   Note median time in Progressed state for Stage IV is five cycles. A single line of CT lasts six cycles. 90% of these patients do not have time to receive three lines of treatment even if they were given consecutively. Even the other stages do not have much time to receive CT after first progression.
 
 ```{r}
 v_dead_portion <- rowSums(a_trace_semi_norm["Dead", , n_cycles + 1, ], na.rm = TRUE)
@@ -742,6 +759,8 @@ ggplot(data = filter(df_trace_semi_norm, Cycle == 173, State != "Stable"),
   facet_wrap(vars(State))
 
 ```
+
+-   Entries into states (i.e. Sojourn = 0).
 
 ```{r}
 ggplot(data = filter(df_trace_semi_norm, Cycle > 0, Sojourn == 0)) +
